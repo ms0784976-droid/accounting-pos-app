@@ -6,6 +6,7 @@ import {
   useContext,
   useMemo,
   useState,
+  useEffect,
   type ReactNode,
 } from "react"
 import type {
@@ -47,10 +48,9 @@ export function paymentStatus(c: Customer, today: string): PaymentStatus {
 }
 
 /* ------------------------------------------------------------------ */
-/* Accounts & Data (Empty Production Initialization)                  */
+/* System Accounts                                                    */
 /* ------------------------------------------------------------------ */
 
-// حساب الآدمن الأساسي الوحيد للوحة تحكم المشرف (Owner)
 const SYSTEM_OWNER_USER: AuthUser = {
   id: "auth_owner",
   tenantId: null,
@@ -131,43 +131,54 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
-  const ownerStore = useContext(OwnerStoreContext)
 
   const login = useCallback((username: string, _password: string): boolean => {
     const cleanUser = username.trim().toLowerCase()
 
-    // 1. حساب المشرف الرئيسي للنظام
+    // 1. حساب المشرف الرئيسي (Owner)
     if (cleanUser === SYSTEM_OWNER_USER.username || cleanUser === SYSTEM_OWNER_USER.email) {
       setAuthUser(SYSTEM_OWNER_USER)
       return true
     }
 
-    // 2. الفحص من العملاء المُضافين في المنصة
-    if (ownerStore) {
-      const tenant = ownerStore.tenants.find(
-        (t) =>
-          t.email.toLowerCase() === cleanUser ||
-          t.ownerName.toLowerCase() === cleanUser ||
-          t.name.toLowerCase() === cleanUser
-      )
-
-      if (tenant) {
-        if (tenant.status === "frozen") return false
-
-        setAuthUser({
-          id: `auth_${tenant.id}`,
-          tenantId: tenant.id,
-          systemRole: "client",
-          name: tenant.ownerName,
-          email: tenant.email,
-          username: tenant.email,
-        })
-        return true
+    // 2. قراءة العملاء مباشرة من LocalStorage لضمان توفر أحدث إضافة
+    let allTenants: Tenant[] = []
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("mohaseb_tenants")
+      if (stored) {
+        try {
+          allTenants = JSON.parse(stored)
+        } catch (e) {
+          console.error("Failed to parse tenants", e)
+        }
       }
     }
 
+    // 3. المطابقة باسم العميل (ownerName) أو اسم المنشأة (name) أو البريد (email)
+    const tenant = allTenants.find((t) => {
+      const ownerNameMatch = t.ownerName ? t.ownerName.trim().toLowerCase() === cleanUser : false
+      const storeNameMatch = t.name ? t.name.trim().toLowerCase() === cleanUser : false
+      const emailMatch = t.email ? t.email.trim().toLowerCase() === cleanUser : false
+
+      return ownerNameMatch || storeNameMatch || emailMatch
+    })
+
+    if (tenant) {
+      if (tenant.status === "frozen") return false
+
+      setAuthUser({
+        id: `auth_${tenant.id}`,
+        tenantId: tenant.id,
+        systemRole: "client",
+        name: tenant.ownerName || tenant.name,
+        email: tenant.email,
+        username: tenant.ownerName || tenant.email,
+      })
+      return true
+    }
+
     return false
-  }, [ownerStore])
+  }, [])
 
   const logout = useCallback(() => setAuthUser(null), [])
   return <AuthContext.Provider value={{ authUser, login, logout }}>{children}</AuthContext.Provider>
@@ -184,17 +195,46 @@ export function useAuth(): AuthContextValue {
 /* ------------------------------------------------------------------ */
 
 export function OwnerStoreProvider({ children }: { children: ReactNode }) {
-  const [tenants, setTenants] = useState<Tenant[]>([])
+  const [tenants, setTenants] = useState<Tenant[]>(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("mohaseb_tenants")
+      if (stored) {
+        try {
+          return JSON.parse(stored)
+        } catch (e) {
+          console.error(e)
+        }
+      }
+    }
+    return []
+  })
+
+  // تحديث LocalStorage تلقائياً عند تغيير حالة العملاء
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("mohaseb_tenants", JSON.stringify(tenants))
+    }
+  }, [tenants])
 
   const addTenant: OwnerStoreValue["addTenant"] = useCallback((t) => {
-    setTenants((prev) => [{ ...t, id: genId(), createdAt: TODAY }, ...prev])
+    const newTenant: Tenant = { ...t, id: genId(), createdAt: TODAY }
+    setTenants((prev) => {
+      const updated = [newTenant, ...prev]
+      if (typeof window !== "undefined") {
+        localStorage.setItem("mohaseb_tenants", JSON.stringify(updated))
+      }
+      return updated
+    })
   }, [])
+
   const updateTenant: OwnerStoreValue["updateTenant"] = useCallback((id, patch) => {
     setTenants((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)))
   }, [])
+
   const toggleTenantStatus: OwnerStoreValue["toggleTenantStatus"] = useCallback((id) => {
     setTenants((prev) => prev.map((t) => t.id === id ? { ...t, status: (t.status === "active" ? "frozen" : "active") as Tenant["status"] } : t))
   }, [])
+
   const deleteTenant: OwnerStoreValue["deleteTenant"] = useCallback((id) => {
     setTenants((prev) => prev.filter((t) => t.id !== id))
   }, [])
