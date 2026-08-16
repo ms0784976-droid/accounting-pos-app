@@ -23,13 +23,6 @@ export function LoginPage() {
     setLoading(false)
   }
 
-  const demoAccounts = [
-    { label: "مشرف المنصة", username: "owner", role: "owner" },
-    { label: "شركة الأفق للألمنيوم", username: "alum", role: "client" },
-    { label: "مركز النور الغذائي", username: "grocery", role: "client" },
-    { label: "ورشة كريم", username: "auto", role: "client" },
-  ]
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 flex items-center justify-center p-4">
       {/* Background pattern */}
@@ -109,29 +102,6 @@ export function LoginPage() {
               {loading ? "جارٍ تسجيل الدخول..." : "دخول"}
             </button>
           </form>
-
-          {/* Demo accounts */}
-          <div className="mt-6 pt-5 border-t border-white/10">
-            <p className="text-xs font-medium text-blue-300/60 mb-3 text-center">حسابات تجريبية — أي كلمة مرور</p>
-            <div className="grid grid-cols-2 gap-2">
-              {demoAccounts.map((a) => (
-                <button
-                  key={a.username}
-                  type="button"
-                  onClick={() => { setUsername(a.username); setPassword("demo") }}
-                  className={cn(
-                    "text-right rounded-xl px-3 py-2.5 text-xs transition border",
-                    a.role === "owner"
-                      ? "bg-purple-500/15 border-purple-400/20 text-purple-200 hover:bg-purple-500/25"
-                      : "bg-blue-500/10 border-blue-400/15 text-blue-200 hover:bg-blue-500/20"
-                  )}
-                >
-                  <span className="block font-semibold">{a.label}</span>
-                  <span className="block text-[10px] opacity-60 mt-0.5">@{a.username}</span>
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
 
         <p className="text-center text-blue-400/40 text-xs mt-6">

@@ -1,16 +1,15 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useAuth, useOwnerStore } from "@/lib/store"
 import { PLAN_META, TENANT_STATUS_META } from "@/lib/constants"
 import type { Tenant, SubscriptionPlan, TenantStatus } from "@/lib/types"
 import {
   Calculator, LogOut, Plus, Building2, Users, Activity,
   CheckCircle, XCircle, Clock, Pencil, Trash2, Moon, Sun,
-  ChevronDown, BarChart3, Crown, Shield,
+  Crown, Shield, Key
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { useEffect } from "react"
 
 const TODAY = "2026-08-16"
 
@@ -55,7 +54,7 @@ function StatusBadge({ status }: { status: TenantStatus }) {
 
 // ── Add/Edit Tenant Modal ────────────────────────────────────────────────
 const emptyForm = {
-  name: "", ownerName: "", email: "", phone: "",
+  name: "", ownerName: "", email: "", phone: "", tempPassword: "",
   plan: "basic" as SubscriptionPlan, status: "active" as TenantStatus,
   industry: "", currency: "SAR", expiresAt: "2027-08-16",
 }
@@ -70,14 +69,16 @@ function TenantModal({
 }) {
   const [form, setForm] = useState(initial ? {
     name: initial.name, ownerName: initial.ownerName, email: initial.email,
-    phone: initial.phone, plan: initial.plan, status: initial.status,
+    phone: initial.phone, tempPassword: (initial as any).tempPassword || "",
+    plan: initial.plan, status: initial.status,
     industry: initial.industry, currency: initial.currency, expiresAt: initial.expiresAt,
   } : { ...emptyForm })
 
   useEffect(() => {
     if (open) setForm(initial ? {
       name: initial.name, ownerName: initial.ownerName, email: initial.email,
-      phone: initial.phone, plan: initial.plan, status: initial.status,
+      phone: initial.phone, tempPassword: (initial as any).tempPassword || "",
+      plan: initial.plan, status: initial.status,
       industry: initial.industry, currency: initial.currency, expiresAt: initial.expiresAt,
     } : { ...emptyForm })
   }, [open, initial])
@@ -100,14 +101,17 @@ function TenantModal({
             ["ownerName", "اسم صاحب النشاط"],
             ["email", "البريد الإلكتروني"],
             ["phone", "رقم الجوال"],
+            ["tempPassword", "كلمة المرور للحساب"],
             ["industry", "القطاع / المجال"],
             ["expiresAt", "تاريخ الانتهاء"],
           ] as [keyof typeof form, string][]).map(([k, label]) => (
             <div key={k}>
               <label className="block text-xs font-medium text-muted-foreground mb-1">{label}</label>
               <input
+                type="text"
                 value={String(form[k])}
                 onChange={(e) => set(k, e.target.value)}
+                placeholder={k === "tempPassword" ? "كلمة سر الحساب" : ""}
                 className="w-full h-10 rounded-xl border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
               />
             </div>
@@ -190,7 +194,7 @@ export function OwnerShell() {
     if (editTenant) {
       updateTenant(editTenant.id, data)
     } else {
-      addTenant({ ...data, createdAt: TODAY, id: "" })
+      addTenant(data as any)
     }
     setEditTenant(undefined)
   }
@@ -283,6 +287,7 @@ export function OwnerShell() {
                 <tr className="border-b border-border text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   <th className="px-6 py-3 text-right">النشاط التجاري</th>
                   <th className="px-6 py-3 text-right">صاحب النشاط</th>
+                  <th className="px-6 py-3 text-right">كلمة المرور</th>
                   <th className="px-6 py-3 text-right">القطاع</th>
                   <th className="px-6 py-3 text-right">الخطة</th>
                   <th className="px-6 py-3 text-right">الحالة</th>
@@ -293,6 +298,7 @@ export function OwnerShell() {
               <tbody className="divide-y divide-border">
                 {filtered.map((t) => {
                   const expiringSoon = t.expiresAt <= "2026-09-16" && t.status === "active"
+                  const tempPass = (t as any).tempPassword
                   return (
                     <tr key={t.id} className="hover:bg-muted/40 transition">
                       <td className="px-6 py-4">
@@ -307,6 +313,15 @@ export function OwnerShell() {
                         </div>
                       </td>
                       <td className="px-6 py-4 text-foreground">{t.ownerName}</td>
+                      <td className="px-6 py-4">
+                        {tempPass ? (
+                          <span className="inline-flex items-center gap-1 font-mono text-xs bg-muted px-2.5 py-1 rounded-lg text-foreground font-semibold border border-border">
+                            <Key className="size-3 text-primary" /> {tempPass}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground/60">—</span>
+                        )}
+                      </td>
                       <td className="px-6 py-4 text-muted-foreground">{t.industry}</td>
                       <td className="px-6 py-4"><PlanBadge plan={t.plan} /></td>
                       <td className="px-6 py-4"><StatusBadge status={t.status} /></td>
