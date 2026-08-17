@@ -1,40 +1,38 @@
 "use client"
 
+/**
+ * lib/store.tsx — النسخة السحابية الكاملة
+ * جميع البيانات تُجلب من Supabase وتُرسل إليه عبر Server Actions
+ * لا يوجد أي استخدام لـ localStorage
+ */
+
 import {
-  createContext,
-  useCallback,
-  useContext,
-  useMemo,
-  useState,
-  useEffect,
-  type ReactNode,
+  createContext, useCallback, useContext, useMemo,
+  useState, useEffect, useTransition, type ReactNode,
 } from "react"
 import type {
-  AuthUser,
-  Customer,
-  LedgerEntry,
-  PaymentStatus,
-  Product,
-  Purchase,
-  Sale,
-  StockItem,
-  Tenant,
-  TenantUser,
-  TenantStatus,
-  UnitCode,
+  AuthUser, Customer, LedgerEntry, PaymentStatus,
+  Product, Purchase, Sale, StockItem, Tenant,
+  TenantUser, TenantStatus, UnitCode,
 } from "./types"
 import { CURRENCIES } from "./constants"
+import { loginAction, logoutAction, getSessionAction } from "@/app/actions/auth"
+import {
+  fetchTenantsAction, addTenantAction, updateTenantAction,
+  toggleTenantStatusAction, deleteTenantAction,
+} from "@/app/actions/tenants"
+import {
+  fetchProductsAction, addProductAction, updateProductAction, deleteProductAction,
+  fetchPurchasesAction, addPurchaseAction,
+  fetchSalesAction, addSaleAction,
+  fetchCustomersAction, addCustomerAction, recordPaymentAction,
+  fetchTenantUsersAction, addTenantUserAction, updateTenantUserAction,
+  toggleTenantUserStatusAction, deleteTenantUserAction,
+  fetchTenantCurrencyAction, updateTenantCurrencyAction,
+} from "@/app/actions/client-data"
 
-/* ------------------------------------------------------------------ */
-/* Helpers                                                            */
-/* ------------------------------------------------------------------ */
-
-const TODAY = new Date().toISOString().split("T")[0]
-
-const genId = () =>
-  typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `id_${Math.random().toString(36).slice(2)}`
+/* ── Helpers ──────────────────────────────────────────────────── */
+export const TODAY = new Date().toISOString().split("T")[0]
 
 export function remainingBalance(c: Customer): number {
   return Math.max(0, c.totalCharged - c.amountPaid)
@@ -47,30 +45,23 @@ export function paymentStatus(c: Customer, today: string): PaymentStatus {
   return "partial"
 }
 
-/* ------------------------------------------------------------------ */
-/* System Accounts                                                    */
-/* ------------------------------------------------------------------ */
-
-const SYSTEM_OWNER_USER: AuthUser = {
-  id: "auth_owner",
-  tenantId: null,
-  systemRole: "owner",
-  name: "مشرف المنصة",
-  email: "owner@mohaseb.app",
-  username: "owner",
-}
-
-/* ------------------------------------------------------------------ */
-/* Derived: Ledger + Stock                                            */
-/* ------------------------------------------------------------------ */
-
 function buildLedger(purchases: Purchase[], sales: Sale[], tenantId: string): LedgerEntry[] {
   const fromP: LedgerEntry[] = purchases
     .filter((p) => p.tenantId === tenantId)
-    .map((p) => ({ id: `l_${p.id}`, tenantId, type: "purchase" as const, itemName: p.itemName, sku: p.sku, unit: p.unit, quantity: p.quantity, amount: p.quantity * p.unitCost, party: p.supplier, userId: p.userId, date: p.date }))
+    .map((p) => ({
+      id: `l_${p.id}`, tenantId, type: "purchase" as const,
+      itemName: p.itemName, sku: p.sku, unit: p.unit,
+      quantity: p.quantity, amount: p.quantity * p.unitCost,
+      party: p.supplier, userId: p.userId, date: p.date,
+    }))
   const fromS: LedgerEntry[] = sales
     .filter((s) => s.tenantId === tenantId)
-    .map((s) => ({ id: `l_${s.id}`, tenantId, type: "sale" as const, itemName: s.itemName, sku: s.sku, unit: s.unit, quantity: s.quantity, amount: s.quantity * s.unitPrice, party: s.buyer, userId: s.userId, method: s.method, date: s.date }))
+    .map((s) => ({
+      id: `l_${s.id}`, tenantId, type: "sale" as const,
+      itemName: s.itemName, sku: s.sku, unit: s.unit,
+      quantity: s.quantity, amount: s.quantity * s.unitPrice,
+      party: s.buyer, userId: s.userId, method: s.method, date: s.date,
+    }))
   return [...fromP, ...fromS].sort((a, b) => (a.date < b.date ? 1 : -1))
 }
 
@@ -78,18 +69,14 @@ function buildStock(purchases: Purchase[], sales: Sale[], tenantId: string): Sto
   const map = new Map<string, StockItem>()
   for (const p of purchases.filter((x) => x.tenantId === tenantId)) {
     const ex = map.get(p.sku) ?? { sku: p.sku, itemName: p.itemName, unit: p.unit, incoming: 0, outgoing: 0, balance: 0, lastCost: 0, lastPrice: 0 }
-    ex.incoming += p.quantity
-    ex.lastCost = p.unitCost
-    ex.itemName = p.itemName
-    ex.unit = p.unit
+    ex.incoming += p.quantity; ex.lastCost = p.unitCost
+    ex.itemName = p.itemName; ex.unit = p.unit
     map.set(p.sku, ex)
   }
   for (const s of sales.filter((x) => x.tenantId === tenantId)) {
     const ex = map.get(s.sku) ?? { sku: s.sku, itemName: s.itemName, unit: s.unit, incoming: 0, outgoing: 0, balance: 0, lastCost: 0, lastPrice: 0 }
-    ex.outgoing += s.quantity
-    ex.lastPrice = s.unitPrice
-    ex.itemName = s.itemName
-    ex.unit = s.unit
+    ex.outgoing += s.quantity; ex.lastPrice = s.unitPrice
+    ex.itemName = s.itemName; ex.unit = s.unit
     map.set(s.sku, ex)
   }
   const items = Array.from(map.values())
@@ -97,91 +84,51 @@ function buildStock(purchases: Purchase[], sales: Sale[], tenantId: string): Sto
   return items
 }
 
-/* ------------------------------------------------------------------ */
-/* Owner Store Context                                                */
-/* ------------------------------------------------------------------ */
+const numberFmt = new Intl.NumberFormat("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })
 
-interface OwnerStoreValue {
-  tenants: Tenant[]
-  addTenant: (t: Omit<Tenant, "id" | "createdAt">) => void
-  updateTenant: (id: string, patch: Partial<Tenant>) => void
-  toggleTenantStatus: (id: string) => void
-  deleteTenant: (id: string) => void
-}
-
-const OwnerStoreContext = createContext<OwnerStoreValue | null>(null)
-
-export function useOwnerStore(): OwnerStoreValue {
-  const ctx = useContext(OwnerStoreContext)
-  if (!ctx) throw new Error("useOwnerStore must be inside OwnerStoreProvider")
-  return ctx
-}
-
-/* ------------------------------------------------------------------ */
-/* Auth Context                                                       */
-/* ------------------------------------------------------------------ */
+/* ================================================================ */
+/* AUTH CONTEXT                                                      */
+/* ================================================================ */
 
 interface AuthContextValue {
   authUser: AuthUser | null
-  login: (username: string, password: string) => boolean
-  logout: () => void
+  loading: boolean
+  login: (identifier: string, password: string) => Promise<string | null>
+  logout: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
+  const [loading, setLoading] = useState(true)
 
-  const login = useCallback((username: string, _password: string): boolean => {
-    const cleanUser = username.trim().toLowerCase()
-
-    // 1. حساب المشرف الرئيسي (Owner)
-    if (cleanUser === SYSTEM_OWNER_USER.username || cleanUser === SYSTEM_OWNER_USER.email) {
-      setAuthUser(SYSTEM_OWNER_USER)
-      return true
-    }
-
-    // 2. قراءة العملاء مباشرة من LocalStorage لضمان توفر أحدث إضافة
-    let allTenants: Tenant[] = []
-    if (typeof window !== "undefined") {
-      const stored = localStorage.getItem("mohaseb_tenants")
-      if (stored) {
-        try {
-          allTenants = JSON.parse(stored)
-        } catch (e) {
-          console.error("Failed to parse tenants", e)
-        }
-      }
-    }
-
-    // 3. المطابقة باسم العميل (ownerName) أو اسم المنشأة (name) أو البريد (email)
-    const tenant = allTenants.find((t) => {
-      const ownerNameMatch = t.ownerName ? t.ownerName.trim().toLowerCase() === cleanUser : false
-      const storeNameMatch = t.name ? t.name.trim().toLowerCase() === cleanUser : false
-      const emailMatch = t.email ? t.email.trim().toLowerCase() === cleanUser : false
-
-      return ownerNameMatch || storeNameMatch || emailMatch
-    })
-
-    if (tenant) {
-      if (tenant.status === "frozen") return false
-
-      setAuthUser({
-        id: `auth_${tenant.id}`,
-        tenantId: tenant.id,
-        systemRole: "client",
-        name: tenant.ownerName || tenant.name,
-        email: tenant.email,
-        username: tenant.ownerName || tenant.email,
+  // استعادة الجلسة عند تحميل الصفحة
+  useEffect(() => {
+    getSessionAction()
+      .then((session) => {
+        if (session) setAuthUser(session.user)
       })
-      return true
-    }
-
-    return false
+      .finally(() => setLoading(false))
   }, [])
 
-  const logout = useCallback(() => setAuthUser(null), [])
-  return <AuthContext.Provider value={{ authUser, login, logout }}>{children}</AuthContext.Provider>
+  const login = useCallback(async (identifier: string, password: string): Promise<string | null> => {
+    const result = await loginAction(identifier, password)
+    if ("error" in result) return result.error
+    setAuthUser(result.user)
+    return null
+  }, [])
+
+  const logout = useCallback(async () => {
+    await logoutAction()
+    setAuthUser(null)
+  }, [])
+
+  return (
+    <AuthContext.Provider value={{ authUser, loading, login, logout }}>
+      {children}
+    </AuthContext.Provider>
+  )
 }
 
 export function useAuth(): AuthContextValue {
@@ -190,67 +137,107 @@ export function useAuth(): AuthContextValue {
   return ctx
 }
 
-/* ------------------------------------------------------------------ */
-/* Owner Store Provider Component                                     */
-/* ------------------------------------------------------------------ */
+/* ================================================================ */
+/* OWNER STORE                                                       */
+/* ================================================================ */
+
+interface OwnerStoreValue {
+  tenants: Tenant[]
+  loading: boolean
+  addTenant: (t: Omit<Tenant, "id" | "createdAt"> & { tempPassword?: string }) => Promise<string | null>
+  updateTenant: (id: string, patch: Partial<Tenant>) => Promise<void>
+  toggleTenantStatus: (id: string) => Promise<void>
+  deleteTenant: (id: string) => Promise<void>
+  refetch: () => Promise<void>
+}
+
+const OwnerStoreContext = createContext<OwnerStoreValue | null>(null)
 
 export function OwnerStoreProvider({ children }: { children: ReactNode }) {
-  const [tenants, setTenants] = useState<Tenant[]>(() => {
-    if (typeof window !== "undefined") {
-      const stored = localStorage.getItem("mohaseb_tenants")
-      if (stored) {
-        try {
-          return JSON.parse(stored)
-        } catch (e) {
-          console.error(e)
-        }
-      }
-    }
-    return []
-  })
+  const [tenants, setTenants] = useState<Tenant[]>([])
+  const [loading, setLoading] = useState(true)
+  const { authUser } = useAuth()
 
-  // تحديث LocalStorage تلقائياً عند تغيير حالة العملاء
+  const refetch = useCallback(async () => {
+    if (authUser?.systemRole !== "owner") return
+    try {
+      const data = await fetchTenantsAction()
+      setTenants(data)
+    } catch (e) {
+      console.error("fetchTenants error:", e)
+    }
+  }, [authUser])
+
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem("mohaseb_tenants", JSON.stringify(tenants))
+    if (authUser?.systemRole === "owner") {
+      setLoading(true)
+      refetch().finally(() => setLoading(false))
     }
-  }, [tenants])
+  }, [authUser, refetch])
 
-  const addTenant: OwnerStoreValue["addTenant"] = useCallback((t) => {
-    const newTenant: Tenant = { ...t, id: genId(), createdAt: TODAY }
-    setTenants((prev) => {
-      const updated = [newTenant, ...prev]
-      if (typeof window !== "undefined") {
-        localStorage.setItem("mohaseb_tenants", JSON.stringify(updated))
-      }
-      return updated
+  const addTenant = useCallback(async (
+    t: Omit<Tenant, "id" | "createdAt"> & { tempPassword?: string }
+  ): Promise<string | null> => {
+    const result = await addTenantAction({
+      name: t.name,
+      ownerName: t.ownerName,
+      email: t.email,
+      phone: t.phone,
+      tempPassword: t.tempPassword ?? "Mohaseb@2026",
+      plan: t.plan,
+      status: t.status,
+      industry: t.industry,
+      currency: t.currency,
+      expiresAt: t.expiresAt,
     })
+    if (result.error) return result.error
+    setTenants((prev) => [result.tenant, ...prev])
+    return null
   }, [])
 
-  const updateTenant: OwnerStoreValue["updateTenant"] = useCallback((id, patch) => {
+  const updateTenant = useCallback(async (id: string, patch: Partial<Tenant>) => {
+    await updateTenantAction(id, {
+      name: patch.name,
+      ownerName: patch.ownerName,
+      email: patch.email,
+      phone: patch.phone,
+      plan: patch.plan,
+      status: patch.status,
+      industry: patch.industry,
+      currency: patch.currency,
+      expiresAt: patch.expiresAt,
+    })
     setTenants((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)))
   }, [])
 
-  const toggleTenantStatus: OwnerStoreValue["toggleTenantStatus"] = useCallback((id) => {
-    setTenants((prev) => prev.map((t) => t.id === id ? { ...t, status: (t.status === "active" ? "frozen" : "active") as Tenant["status"] } : t))
-  }, [])
+  const toggleTenantStatus = useCallback(async (id: string) => {
+    const current = tenants.find((t) => t.id === id)
+    if (!current) return
+    const newStatus = await toggleTenantStatusAction(id, current.status)
+    setTenants((prev) => prev.map((t) => (t.id === id ? { ...t, status: newStatus } : t)))
+  }, [tenants])
 
-  const deleteTenant: OwnerStoreValue["deleteTenant"] = useCallback((id) => {
+  const deleteTenant = useCallback(async (id: string) => {
+    await deleteTenantAction(id)
     setTenants((prev) => prev.filter((t) => t.id !== id))
   }, [])
 
   return (
-    <OwnerStoreContext.Provider value={{ tenants, addTenant, updateTenant, toggleTenantStatus, deleteTenant }}>
+    <OwnerStoreContext.Provider value={{ tenants, loading, addTenant, updateTenant, toggleTenantStatus, deleteTenant, refetch }}>
       {children}
     </OwnerStoreContext.Provider>
   )
 }
 
-/* ------------------------------------------------------------------ */
-/* Client (Tenant) Store Context                                       */
-/* ------------------------------------------------------------------ */
+export function useOwnerStore(): OwnerStoreValue {
+  const ctx = useContext(OwnerStoreContext)
+  if (!ctx) throw new Error("useOwnerStore must be inside OwnerStoreProvider")
+  return ctx
+}
 
-const numberFmt = new Intl.NumberFormat("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+/* ================================================================ */
+/* CLIENT STORE                                                      */
+/* ================================================================ */
 
 interface ClientStoreValue {
   today: string
@@ -262,114 +249,202 @@ interface ClientStoreValue {
   sales: Sale[]
   ledger: LedgerEntry[]
   stock: StockItem[]
+  loading: boolean
   currentTenantUser: TenantUser | null
   setCurrentTenantUserId: (id: string) => void
   currency: (typeof CURRENCIES)[number]
-  setCurrencyCode: (code: string) => void
+  setCurrencyCode: (code: string) => Promise<void>
   fmt: (amount: number) => string
   userName: (id: string) => string
-  // Product actions
-  addProduct: (p: Omit<Product, "id" | "createdAt">) => void
-  updateProduct: (id: string, patch: Partial<Product>) => void
-  deleteProduct: (id: string) => void
-  // Financial actions
-  addTenantUser: (u: Omit<TenantUser, "id" | "createdAt" | "lastActive" | "status">) => void
-  updateTenantUser: (id: string, patch: Partial<TenantUser>) => void
-  toggleTenantUserStatus: (id: string) => void
-  deleteTenantUser: (id: string) => void
-  addPurchase: (p: Omit<Purchase, "id" | "tenantId">) => void
-  addSale: (s: Omit<Sale, "id" | "tenantId">) => void
-  recordPayment: (customerId: string, amount: number) => void
-  addCustomer: (c: Omit<Customer, "id" | "updatedAt" | "tenantId">) => void
+  // Products
+  addProduct: (p: Omit<Product, "id" | "createdAt">) => Promise<void>
+  updateProduct: (id: string, patch: Partial<Product>) => Promise<void>
+  deleteProduct: (id: string) => Promise<void>
+  // Users
+  addTenantUser: (u: Omit<TenantUser, "id" | "createdAt" | "lastActive" | "status"> & { tempPassword?: string }) => Promise<void>
+  updateTenantUser: (id: string, patch: Partial<TenantUser>) => Promise<void>
+  toggleTenantUserStatus: (id: string) => Promise<void>
+  deleteTenantUser: (id: string) => Promise<void>
+  // Financials
+  addPurchase: (p: Omit<Purchase, "id" | "tenantId">) => Promise<void>
+  addSale: (s: Omit<Sale, "id" | "tenantId">) => Promise<void>
+  recordPayment: (customerId: string, amount: number) => Promise<void>
+  addCustomer: (c: Omit<Customer, "id" | "updatedAt" | "tenantId">) => Promise<void>
+  refetchAll: () => Promise<void>
 }
 
 const ClientStoreContext = createContext<ClientStoreValue | null>(null)
 
 export function ClientStoreProvider({
-  tenantId, initialCurrency, children,
-}: { tenantId: string; initialCurrency?: string; children: ReactNode }) {
-  const [tenantUsers, setTenantUsers]   = useState<TenantUser[]>([])
-  const [products, setProducts]         = useState<Product[]>([])
-  const [customers, setCustomers]       = useState<Customer[]>([])
-  const [purchases, setPurchases]       = useState<Purchase[]>([])
-  const [sales, setSales]               = useState<Sale[]>([])
+  tenantId, children,
+}: { tenantId: string; children: ReactNode }) {
+  const [tenantUsers, setTenantUsers] = useState<TenantUser[]>([])
+  const [products, setProducts]       = useState<Product[]>([])
+  const [customers, setCustomers]     = useState<Customer[]>([])
+  const [purchases, setPurchases]     = useState<Purchase[]>([])
+  const [sales, setSales]             = useState<Sale[]>([])
+  const [currencyCode, setCurrencyCodeState] = useState<string>("ILS")
   const [currentTenantUserId, setCurrentTenantUserId] = useState<string>("")
-  const [currencyCode, setCurrencyCode] = useState<string>(initialCurrency ?? "ILS")
+  const [loading, setLoading] = useState(true)
 
-  const currency = useMemo(() => CURRENCIES.find((c) => c.code === currencyCode) ?? CURRENCIES[0], [currencyCode])
-  const fmt = useCallback((amount: number) => `${numberFmt.format(amount)} ${currency.symbol}`, [currency])
-  const currentTenantUser = useMemo(() => tenantUsers.find((u) => u.id === currentTenantUserId) ?? tenantUsers[0] ?? null, [tenantUsers, currentTenantUserId])
+  // جلب كل البيانات من Supabase
+  const refetchAll = useCallback(async () => {
+    try {
+      const [users, prods, custs, purcs, sls, cur] = await Promise.all([
+        fetchTenantUsersAction(tenantId),
+        fetchProductsAction(tenantId),
+        fetchCustomersAction(tenantId),
+        fetchPurchasesAction(tenantId),
+        fetchSalesAction(tenantId),
+        fetchTenantCurrencyAction(tenantId),
+      ])
+      setTenantUsers(users)
+      setProducts(prods)
+      setCustomers(custs)
+      setPurchases(purcs)
+      setSales(sls)
+      setCurrencyCodeState(cur)
+    } catch (e) {
+      console.error("refetchAll error:", e)
+    }
+  }, [tenantId])
+
+  useEffect(() => {
+    setLoading(true)
+    refetchAll().finally(() => setLoading(false))
+  }, [refetchAll])
+
+  const currency = useMemo(
+    () => CURRENCIES.find((c) => c.code === currencyCode) ?? CURRENCIES[0],
+    [currencyCode]
+  )
+  const fmt = useCallback(
+    (amount: number) => `${numberFmt.format(amount)} ${currency.symbol}`,
+    [currency]
+  )
+  const currentTenantUser = useMemo(
+    () => tenantUsers.find((u) => u.id === currentTenantUserId) ?? tenantUsers[0] ?? null,
+    [tenantUsers, currentTenantUserId]
+  )
   const ledger = useMemo(() => buildLedger(purchases, sales, tenantId), [purchases, sales, tenantId])
   const stock  = useMemo(() => buildStock(purchases, sales, tenantId),  [purchases, sales, tenantId])
-  const userName = useCallback((id: string) => tenantUsers.find((u) => u.id === id)?.name ?? "غير معروف", [tenantUsers])
+  const userName = useCallback(
+    (id: string) => tenantUsers.find((u) => u.id === id)?.name ?? "غير معروف",
+    [tenantUsers]
+  )
 
-  // ── Product CRUD ────────────────────────────────────────────────
-  const addProduct = useCallback((p: Omit<Product, "id" | "createdAt">) => {
-    setProducts((prev) => [{ ...p, id: genId(), createdAt: TODAY }, ...prev])
+  const setCurrencyCode = useCallback(async (code: string) => {
+    setCurrencyCodeState(code)
+    await updateTenantCurrencyAction(tenantId, code)
+  }, [tenantId])
+
+  // ── Products ──
+  const addProduct = useCallback(async (p: Omit<Product, "id" | "createdAt">) => {
+    const created = await addProductAction(p)
+    setProducts((prev) => [created, ...prev])
   }, [])
-  const updateProduct = useCallback((id: string, patch: Partial<Product>) => {
+
+  const updateProduct = useCallback(async (id: string, patch: Partial<Product>) => {
+    await updateProductAction(id, patch)
     setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)))
   }, [])
-  const deleteProduct = useCallback((id: string) => {
+
+  const deleteProduct = useCallback(async (id: string) => {
+    await deleteProductAction(id)
     setProducts((prev) => prev.filter((p) => p.id !== id))
   }, [])
 
-  // ── User CRUD ────────────────────────────────────────────────────
-  const addTenantUser = useCallback((u: Omit<TenantUser, "id" | "createdAt" | "lastActive" | "status">) => {
-    setTenantUsers((prev) => [{ ...u, id: genId(), status: "active", createdAt: TODAY, lastActive: TODAY }, ...prev])
+  // ── TenantUsers ──
+  const addTenantUser = useCallback(async (
+    u: Omit<TenantUser, "id" | "createdAt" | "lastActive" | "status"> & { tempPassword?: string }
+  ) => {
+    const created = await addTenantUserAction(u)
+    setTenantUsers((prev) => [created, ...prev])
   }, [])
-  const updateTenantUser = useCallback((id: string, patch: Partial<TenantUser>) => {
+
+  const updateTenantUser = useCallback(async (id: string, patch: Partial<TenantUser>) => {
+    await updateTenantUserAction(id, patch)
     setTenantUsers((prev) => prev.map((u) => (u.id === id ? { ...u, ...patch } : u)))
   }, [])
-  const toggleTenantUserStatus = useCallback((id: string) => {
-    setTenantUsers((prev) => prev.map((u) => u.id === id ? { ...u, status: u.status === "active" ? "frozen" : "active" } : u))
-  }, [])
-  const deleteTenantUser = useCallback((id: string) => {
+
+  const toggleTenantUserStatus = useCallback(async (id: string) => {
+    const user = tenantUsers.find((u) => u.id === id)
+    if (!user) return
+    const newStatus = await toggleTenantUserStatusAction(id, user.status)
+    setTenantUsers((prev) => prev.map((u) => (u.id === id ? { ...u, status: newStatus } : u)))
+  }, [tenantUsers])
+
+  const deleteTenantUser = useCallback(async (id: string) => {
+    await deleteTenantUserAction(id)
     setTenantUsers((prev) => prev.filter((u) => u.id !== id))
   }, [])
 
-  // ── Purchase / Sale ──────────────────────────────────────────────
-  const addPurchase = useCallback((p: Omit<Purchase, "id" | "tenantId">) => {
-    setPurchases((prev) => [{ ...p, id: genId(), tenantId }, ...prev])
-    setProducts((prev) => prev.map((prod) => prod.sku === p.sku ? { ...prod, lastCost: p.unitCost } : prod))
+  // ── Purchases ──
+  const addPurchase = useCallback(async (p: Omit<Purchase, "id" | "tenantId">) => {
+    const created = await addPurchaseAction({ ...p, tenantId })
+    setPurchases((prev) => [created, ...prev])
+    // تحديث آخر سعر في قائمة المنتجات محلياً
+    setProducts((prev) => prev.map((prod) =>
+      prod.sku === p.sku ? { ...prod, lastCost: p.unitCost } : prod
+    ))
   }, [tenantId])
 
-  const addSale = useCallback((s: Omit<Sale, "id" | "tenantId">) => {
-    const newSale: Sale = { ...s, id: genId(), tenantId }
-    setSales((prev) => [newSale, ...prev])
-    setProducts((prev) => prev.map((prod) => prod.sku === s.sku ? { ...prod, lastPrice: s.unitPrice } : prod))
+  // ── Sales ──
+  const addSale = useCallback(async (s: Omit<Sale, "id" | "tenantId">) => {
+    const created = await addSaleAction({ ...s, tenantId })
+    setSales((prev) => [created, ...prev])
+    setProducts((prev) => prev.map((prod) =>
+      prod.sku === s.sku ? { ...prod, lastPrice: s.unitPrice } : prod
+    ))
+    // تحديث الذمم محلياً إذا كان بيعاً آجلاً
     if (s.method === "debt") {
       const total = s.quantity * s.unitPrice
+      const detail = `${s.quantity} ${s.unit} ${s.itemName}`
       setCustomers((prev) => {
         const match = prev.find((c) => c.name.toLowerCase() === s.buyer.toLowerCase())
         if (match) {
           return prev.map((c) => c.id === match.id ? {
             ...c,
-            itemsDetail: c.itemsDetail ? `${c.itemsDetail}، ${s.quantity} ${s.unit} ${s.itemName}` : `${s.quantity} ${s.unit} ${s.itemName}`,
+            itemsDetail: c.itemsDetail ? `${c.itemsDetail}، ${detail}` : detail,
             totalCharged: c.totalCharged + total,
             updatedAt: TODAY,
           } : c)
         }
-        return [{ id: genId(), tenantId, name: s.buyer, phone: "—", accountId: `ACC-${Math.floor(1000 + Math.random() * 9000)}`, itemsDetail: `${s.quantity} ${s.unit} ${s.itemName}`, totalCharged: total, amountPaid: 0, dueDate: TODAY, updatedAt: TODAY }, ...prev]
+        // سيتم جلب العميل الجديد عند refetch؛ حالياً نضيف مبدئياً
+        return [{
+          id: `temp_${Date.now()}`, tenantId, name: s.buyer, phone: "—",
+          accountId: `ACC-${Math.floor(1000 + Math.random() * 9000)}`,
+          itemsDetail: detail, totalCharged: total, amountPaid: 0,
+          dueDate: TODAY, updatedAt: TODAY,
+        }, ...prev]
       })
     }
   }, [tenantId])
 
-  const recordPayment = useCallback((customerId: string, amount: number) => {
-    setCustomers((prev) => prev.map((c) => c.id === customerId ? { ...c, amountPaid: Math.min(c.totalCharged, c.amountPaid + amount), updatedAt: TODAY } : c))
+  // ── Customers ──
+  const recordPayment = useCallback(async (customerId: string, amount: number) => {
+    await recordPaymentAction(customerId, amount)
+    setCustomers((prev) => prev.map((c) =>
+      c.id === customerId
+        ? { ...c, amountPaid: Math.min(c.totalCharged, c.amountPaid + amount), updatedAt: TODAY }
+        : c
+    ))
   }, [])
 
-  const addCustomer = useCallback((c: Omit<Customer, "id" | "updatedAt" | "tenantId">) => {
-    setCustomers((prev) => [{ ...c, id: genId(), tenantId, updatedAt: TODAY }, ...prev])
+  const addCustomer = useCallback(async (c: Omit<Customer, "id" | "updatedAt" | "tenantId">) => {
+    const created = await addCustomerAction({ ...c, tenantId })
+    setCustomers((prev) => [created, ...prev])
   }, [tenantId])
 
   const value: ClientStoreValue = {
-    today: TODAY, tenantId, tenantUsers, products, customers, purchases, sales, ledger, stock,
-    currentTenantUser, setCurrentTenantUserId, currency, setCurrencyCode, fmt, userName,
+    today: TODAY, tenantId, tenantUsers, products, customers, purchases, sales,
+    ledger, stock, loading, currentTenantUser, setCurrentTenantUserId,
+    currency, setCurrencyCode, fmt, userName,
     addProduct, updateProduct, deleteProduct,
     addTenantUser, updateTenantUser, toggleTenantUserStatus, deleteTenantUser,
-    addPurchase, addSale, recordPayment, addCustomer,
+    addPurchase, addSale, recordPayment, addCustomer, refetchAll,
   }
+
   return <ClientStoreContext.Provider value={value}>{children}</ClientStoreContext.Provider>
 }
 
