@@ -16,7 +16,8 @@ import type {
   TenantUser, TenantStatus, UnitCode,
 } from "./types"
 import { CURRENCIES } from "./constants"
-import { loginAction, logoutAction, getSessionAction } from "@/app/actions/auth"
+import { getClient } from "@/lib/supabase/client"
+import { buildAuthUser, resolveEmailAction, logoutAction } from "@/app/actions/auth"
 import {
   fetchTenantsAction, addTenantAction, updateTenantAction,
   toggleTenantStatusAction, deleteTenantAction,
@@ -103,24 +104,65 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [loading, setLoading] = useState(true)
 
-  // استعادة الجلسة عند تحميل الصفحة
+  // ── استعادة الجلسة عبر Browser Client (يعمل على Vercel بدون مشاكل cookies) ──
   useEffect(() => {
-    getSessionAction()
-      .then((session) => {
-        if (session) setAuthUser(session.user)
-      })
-      .finally(() => setLoading(false))
+    const supabase = getClient()
+
+    // جلب الجلسة الحالية من localStorage (Browser Client يديرها تلقائياً)
+    supabase.auth.getSession().then(async (res: any) => {
+      const session = res?.data?.session
+      if (session?.user) {
+        const result = await buildAuthUser(session.user.id, session.user.email ?? "")
+        if (!("error" in result)) setAuthUser(result.user)
+      }
+      setLoading(false)
+    })
+
+    // الاستماع لتغييرات الجلسة (تسجيل دخول/خروج)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event: string, session: any) => {
+        if (event === "SIGNED_OUT" || !session) {
+          setAuthUser(null)
+          return
+        }
+        if (session?.user && event === "SIGNED_IN") {
+          const result = await buildAuthUser(session.user.id, session.user.email ?? "")
+          if (!("error" in result)) setAuthUser(result.user)
+        }
+      }
+    )
+
+    return () => subscription.unsubscribe()
   }, [])
 
   const login = useCallback(async (identifier: string, password: string): Promise<string | null> => {
-    const result = await loginAction(identifier, password)
-    if ("error" in result) return result.error
-    setAuthUser(result.user)
-    return null
+    try {
+      // 1. حل الـ email من username إذا لزم (Server Action)
+      const email = await resolveEmailAction(identifier)
+
+      // 2. تسجيل الدخول عبر Browser Client مباشرة (يحفظ الجلسة في localStorage)
+      const supabase = getClient()
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+
+      if (error || !data.user) {
+        return "البريد الإلكتروني أو كلمة المرور غير صحيحة"
+      }
+
+      // 3. جلب بيانات المستخدم (Server Action بـ Service Role)
+      const result = await buildAuthUser(data.user.id, data.user.email ?? "")
+      if ("error" in result) return result.error
+
+      setAuthUser(result.user)
+      return null
+    } catch (err: any) {
+      return err.message || "حدث خطأ أثناء تسجيل الدخول"
+    }
   }, [])
 
   const logout = useCallback(async () => {
-    await logoutAction()
+    const supabase = getClient()
+    await supabase.auth.signOut()      // يمسح localStorage
+    await logoutAction().catch(() => {}) // يمسح cookies (اختياري)
     setAuthUser(null)
   }, [])
 
