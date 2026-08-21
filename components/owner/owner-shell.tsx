@@ -169,15 +169,18 @@ export function OwnerShell() {
     document.documentElement.classList.toggle("dark", theme === "dark")
   }, [theme])
 
-  const filtered = tenants.filter((t) =>
-    [t.name, t.ownerName, t.email].some((v) => v.toLowerCase().includes(search.toLowerCase()))
-  )
+  const filtered = tenants
+    .filter((t) => t.email !== authUser?.email) // إخفاء أي سجل خاص بحساب مشرف المنصة نفسه
+    .filter((t) =>
+      [t.name, t.ownerName, t.email].some((v) => v.toLowerCase().includes(search.toLowerCase()))
+    )
 
+  const realTenants = tenants.filter((t) => t.email !== authUser?.email)
   const stats = {
-    total: tenants.length,
-    active: tenants.filter((t) => t.status === "active").length,
-    trial:  tenants.filter((t) => t.status === "trial").length,
-    expiringSoon: tenants.filter((t) => t.expiresAt <= SOON && t.status === "active").length,
+    total: realTenants.length,
+    active: realTenants.filter((t) => t.status === "active").length,
+    trial:  realTenants.filter((t) => t.status === "trial").length,
+    expiringSoon: realTenants.filter((t) => t.expiresAt <= SOON && t.status === "active").length,
   }
 
   async function handleSave(data: typeof emptyForm) {
@@ -197,14 +200,22 @@ export function OwnerShell() {
 
   async function handleToggle(id: string) {
     setActionId(id)
-    await toggleTenantStatus(id)
+    try {
+      await toggleTenantStatus(id)
+    } catch (e: any) {
+      alert(e?.message || "تعذّر تنفيذ العملية")
+    }
     setActionId(null)
   }
 
   async function handleDelete(id: string) {
     if (!confirm("هل أنت متأكد من حذف هذا العميل؟ سيتم حذف جميع بياناته نهائياً.")) return
     setActionId(id)
-    await deleteTenant(id)
+    try {
+      await deleteTenant(id)
+    } catch (e: any) {
+      alert(e?.message || "تعذّر تنفيذ العملية")
+    }
     setActionId(null)
   }
 

@@ -161,8 +161,26 @@ export async function toggleTenantStatusAction(
   id: string,
   currentStatus: TenantStatus
 ): Promise<TenantStatus> {
-  const newStatus: TenantStatus = currentStatus === "active" ? "frozen" : "active"
   const supabase = await createServerSupabase()
+
+  // حماية: يُمنع تجميد/تفعيل حساب مشرف المنصة نفسه
+  const { data: tenant } = await supabase
+    .from("tenants")
+    .select("auth_user_id")
+    .eq("id", id)
+    .single()
+  if (tenant?.auth_user_id) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("system_role")
+      .eq("id", tenant.auth_user_id)
+      .single()
+    if (profile?.system_role === "owner") {
+      throw new Error("لا يمكن تجميد حساب مشرف المنصة")
+    }
+  }
+
+  const newStatus: TenantStatus = currentStatus === "active" ? "frozen" : "active"
   const { error } = await supabase
     .from("tenants")
     .update({ status: newStatus })
@@ -182,6 +200,18 @@ export async function deleteTenantAction(id: string): Promise<void> {
     .select("auth_user_id")
     .eq("id", id)
     .single()
+
+  // حماية: يُمنع حذف حساب مشرف المنصة نفسه مهما كان مصدر الطلب
+  if (tenant?.auth_user_id) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("system_role")
+      .eq("id", tenant.auth_user_id)
+      .single()
+    if (profile?.system_role === "owner") {
+      throw new Error("لا يمكن حذف حساب مشرف المنصة")
+    }
+  }
 
   const { error } = await supabase.from("tenants").delete().eq("id", id)
   if (error) throw new Error(error.message)

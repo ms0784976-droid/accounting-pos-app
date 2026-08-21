@@ -1,8 +1,9 @@
-import type { ClientRole, SubscriptionPlan, TenantStatus } from "./types"
+import type { ClientRole, SubscriptionPlan, TenantStatus, ProductType } from "./types"
 
 export type TabId =
   | "overview"
   | "catalog"
+  | "inventory"
   | "customers"
   | "purchases"
   | "sales"
@@ -20,10 +21,17 @@ export const ROLE_META: Record<ClientRole, { label: string; tint: string }> = {
 }
 
 export const ROLE_TABS: Record<ClientRole, TabId[]> = {
-  admin:      ["overview", "catalog", "customers", "purchases", "sales", "ledger", "reports", "users"],
-  accountant: ["overview", "catalog", "customers", "purchases", "sales", "ledger", "reports"],
-  inventory:  ["overview", "catalog", "purchases", "ledger"],
+  admin:      ["overview", "catalog", "inventory", "customers", "purchases", "sales", "ledger", "reports", "users"],
+  accountant: ["overview", "catalog", "inventory", "customers", "purchases", "sales", "ledger", "reports"],
+  inventory:  ["overview", "catalog", "inventory", "purchases", "ledger"],
   cashier:    ["catalog", "sales"],
+}
+
+// نوع الصنف: يحدد هل يُتابَع له رصيد مخزون أم لا
+export const PRODUCT_TYPE_META: Record<ProductType, { label: string; hint: string; color: string; tracksStock: boolean }> = {
+  product: { label: "منتج جاهز",        hint: "قطعة/عبوة جاهزة، يُتابع رصيدها",              color: "bg-blue-100 text-blue-700",   tracksStock: true  },
+  goods:   { label: "بضاعة عامة",       hint: "وزن أو حجم أو أي بضاعة عامة، يُتابع رصيدها",  color: "bg-amber-100 text-amber-700", tracksStock: true  },
+  service: { label: "حرفة / خدمة",      hint: "عمل يُحسب بالوحدة (متر، ساعة...) بلا مخزون",  color: "bg-purple-100 text-purple-700", tracksStock: false },
 }
 
 export const CAN_VIEW_PROFIT: ClientRole[] = ["admin", "accountant"]
@@ -50,6 +58,7 @@ export const CURRENCIES: { code: string; symbol: string; label: string }[] = [
 export const TAB_LABELS: Record<TabId, string> = {
   overview:  "نظرة عامة",
   catalog:   "كتالوج الأصناف",
+  inventory: "المخزون",
   sales:     "المبيعات / POS",
   purchases: "المشتريات",
   customers: "العملاء والذمم",

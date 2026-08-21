@@ -3,7 +3,7 @@
 import { createServerSupabase, createServiceClient } from "@/lib/supabase/server"
 import type {
   Product, Purchase, Sale, Customer, TenantUser,
-  UnitCode, PaymentMethod, ClientRole, UserStatus,
+  UnitCode, PaymentMethod, ClientRole, UserStatus, ProductType,
 } from "@/lib/types"
 
 // ── تحويل الصفوف من snake_case إلى camelCase ────────────────────
@@ -11,7 +11,8 @@ import type {
 function rowToProduct(r: any): Product {
   return {
     id: r.id, tenantId: r.tenant_id, name: r.name, sku: r.sku,
-    unit: r.unit as UnitCode, category: r.category ?? "",
+    unit: r.unit as UnitCode, type: (r.type as ProductType) ?? "product",
+    category: r.category ?? "",
     lastCost: Number(r.last_cost), lastPrice: Number(r.last_price),
     notes: r.notes ?? "", createdAt: r.created_at?.split("T")[0] ?? "",
   }
@@ -78,7 +79,7 @@ export async function addProductAction(
     .from("products")
     .insert({
       tenant_id: product.tenantId, name: product.name, sku: product.sku,
-      unit: product.unit, category: product.category,
+      unit: product.unit, type: product.type, category: product.category,
       last_cost: product.lastCost, last_price: product.lastPrice,
       notes: product.notes,
     })
@@ -97,6 +98,7 @@ export async function updateProductAction(
   if (patch.name !== undefined)       dbPatch.name        = patch.name
   if (patch.sku !== undefined)        dbPatch.sku         = patch.sku
   if (patch.unit !== undefined)       dbPatch.unit        = patch.unit
+  if (patch.type !== undefined)       dbPatch.type        = patch.type
   if (patch.category !== undefined)   dbPatch.category    = patch.category
   if (patch.lastCost !== undefined)   dbPatch.last_cost   = patch.lastCost
   if (patch.lastPrice !== undefined)  dbPatch.last_price  = patch.lastPrice

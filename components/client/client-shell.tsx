@@ -7,6 +7,7 @@ import { ClientSidebar } from "./client-sidebar"
 import { ClientTopbar } from "./client-topbar"
 import { OverviewTab } from "./overview-tab"
 import { CatalogTab } from "./catalog-tab"
+import { InventoryTab } from "./inventory-tab"
 import { SalesTab } from "./sales-tab"
 import { PurchasesTab } from "./purchases-tab"
 import { CustomersTab } from "./customers-tab"
@@ -142,6 +143,7 @@ function ClientApp({ tenantId }: { tenantId: string }) {
               >
                 {activeTab === "overview"  && <OverviewTab />}
                 {activeTab === "catalog"   && <CatalogTab search={search} />}
+                {activeTab === "inventory" && <InventoryTab search={search} />}
                 {activeTab === "sales"     && <SalesTab search={search} />}
                 {activeTab === "purchases" && <PurchasesTab search={search} />}
                 {activeTab === "customers" && <CustomersTab search={search} />}

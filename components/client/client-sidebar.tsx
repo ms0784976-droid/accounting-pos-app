@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "framer-motion"
 import {
   BarChart3, BookText, ChevronRight, LayoutDashboard,
   PackagePlus, PanelRight, Receipt, Users, UsersRound,
-  Calculator, Archive,
+  Calculator, Archive, Warehouse,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { TabId } from "@/lib/constants"
@@ -14,6 +14,7 @@ import type { LucideIcon } from "lucide-react"
 const TAB_ICONS: Record<TabId, LucideIcon> = {
   overview:  LayoutDashboard,
   catalog:   Archive,
+  inventory: Warehouse,
   sales:     Receipt,
   purchases: PackagePlus,
   customers: Users,

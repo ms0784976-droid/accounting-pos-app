@@ -68,12 +68,16 @@ export type UnitCode =
   | "day"    // يوم (خدمات)
 
 // --- Product Catalog (كتالوج الأصناف) ---
+// نوع الصنف: منتج جاهز (كمية بالقطعة) / بضاعة عامة (وزن أو حجم) / حرفة يدوية أو خدمة (تُحسب بالوحدة، بلا مخزون)
+export type ProductType = "product" | "goods" | "service"
+
 export interface Product {
   id: string
   tenantId: string
   name: string          // اسم الصنف
   sku: string           // كود
   unit: UnitCode        // وحدة القياس
+  type: ProductType      // نوع الصنف
   category: string      // تصنيف (اختياري)
   lastCost: number      // آخر سعر شراء
   lastPrice: number     // آخر سعر بيع

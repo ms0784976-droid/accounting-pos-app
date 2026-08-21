@@ -4,14 +4,15 @@ import { useMemo, useState } from "react"
 import { Pencil, Trash2, PackagePlus, Tag } from "lucide-react"
 import { useClientStore } from "@/lib/store"
 import { unitLabel, unitShort } from "@/lib/units"
-import type { Product, UnitCode } from "@/lib/types"
+import type { Product, UnitCode, ProductType } from "@/lib/types"
+import { PRODUCT_TYPE_META } from "@/lib/constants"
 import { SectionCard, EmptyState, Btn, Modal, Field, TextInput, SelectInput } from "./ui"
 import { UnitSelect } from "./unit-select"
 import { cn } from "@/lib/utils"
 
 /* ── نموذج إضافة/تعديل صنف ────────────────────────────────────────── */
 const emptyForm = {
-  name: "", sku: "", unit: "pcs" as UnitCode,
+  name: "", sku: "", unit: "pcs" as UnitCode, type: "product" as ProductType,
   category: "", lastCost: "", lastPrice: "", notes: "",
 }
 
@@ -21,7 +22,7 @@ function ProductModal({ open, onClose, editProduct }: {
   const { addProduct, updateProduct, tenantId } = useClientStore()
   const [form, setForm] = useState(editProduct ? {
     name: editProduct.name, sku: editProduct.sku, unit: editProduct.unit,
-    category: editProduct.category, lastCost: String(editProduct.lastCost),
+    type: editProduct.type, category: editProduct.category, lastCost: String(editProduct.lastCost),
     lastPrice: String(editProduct.lastPrice), notes: editProduct.notes,
   } : { ...emptyForm })
 
@@ -35,6 +36,7 @@ function ProductModal({ open, onClose, editProduct }: {
       name: form.name.trim(),
       sku: form.sku.trim().toUpperCase(),
       unit: form.unit,
+      type: form.type,
       category: form.category.trim(),
       lastCost: Number(form.lastCost) || 0,
       lastPrice: Number(form.lastPrice) || 0,
@@ -83,6 +85,31 @@ function ProductModal({ open, onClose, editProduct }: {
             onChange={(v) => setForm((f) => ({ ...f, unit: v }))}
           />
         </Field>
+
+        <div className="sm:col-span-2">
+          <Field label="نوع الصنف">
+            <div className="grid grid-cols-3 gap-2">
+              {(Object.keys(PRODUCT_TYPE_META) as ProductType[]).map((t) => {
+                const meta = PRODUCT_TYPE_META[t]
+                return (
+                  <button
+                    key={t} type="button"
+                    onClick={() => setForm((f) => ({ ...f, type: t }))}
+                    className={cn(
+                      "rounded-xl border p-3 text-right transition",
+                      form.type === t
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:bg-muted"
+                    )}
+                  >
+                    <p className="text-sm font-semibold text-foreground">{meta.label}</p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">{meta.hint}</p>
+                  </button>
+                )
+              })}
+            </div>
+          </Field>
+        </div>
 
         <Field label="التصنيف / المجموعة">
           <TextInput
@@ -209,6 +236,9 @@ export function CatalogTab({ search }: { search: string }) {
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-semibold text-foreground">{prod.name}</p>
                         <span className="font-mono text-xs bg-muted rounded px-1.5 py-0.5 text-muted-foreground">{prod.sku}</span>
+                        <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium", PRODUCT_TYPE_META[prod.type]?.color)}>
+                          {PRODUCT_TYPE_META[prod.type]?.label ?? prod.type}
+                        </span>
                       </div>
                       <p className="text-xs text-muted-foreground mt-0.5">
                         الوحدة: <strong className="text-foreground">{unitLabel(prod.unit)}</strong>

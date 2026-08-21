@@ -1,0 +1,579 @@
+diff --git a/app/actions/client-data.ts b/app/actions/client-data.ts
+index 740ad67..6c01977 100644
+--- a/app/actions/client-data.ts
++++ b/app/actions/client-data.ts
+@@ -3,7 +3,7 @@
+ import { createServerSupabase, createServiceClient } from "@/lib/supabase/server"
+ import type {
+   Product, Purchase, Sale, Customer, TenantUser,
+-  UnitCode, PaymentMethod, ClientRole, UserStatus,
++  UnitCode, PaymentMethod, ClientRole, UserStatus, ProductType,
+ } from "@/lib/types"
+ 
+ // ── تحويل الصفوف من snake_case إلى camelCase ────────────────────
+@@ -11,7 +11,8 @@ import type {
+ function rowToProduct(r: any): Product {
+   return {
+     id: r.id, tenantId: r.tenant_id, name: r.name, sku: r.sku,
+-    unit: r.unit as UnitCode, category: r.category ?? "",
++    unit: r.unit as UnitCode, type: (r.type as ProductType) ?? "product",
++    category: r.category ?? "",
+     lastCost: Number(r.last_cost), lastPrice: Number(r.last_price),
+     notes: r.notes ?? "", createdAt: r.created_at?.split("T")[0] ?? "",
+   }
+@@ -78,7 +79,7 @@ export async function addProductAction(
+     .from("products")
+     .insert({
+       tenant_id: product.tenantId, name: product.name, sku: product.sku,
+-      unit: product.unit, category: product.category,
++      unit: product.unit, type: product.type, category: product.category,
+       last_cost: product.lastCost, last_price: product.lastPrice,
+       notes: product.notes,
+     })
+@@ -97,6 +98,7 @@ export async function updateProductAction(
+   if (patch.name !== undefined)       dbPatch.name        = patch.name
+   if (patch.sku !== undefined)        dbPatch.sku         = patch.sku
+   if (patch.unit !== undefined)       dbPatch.unit        = patch.unit
++  if (patch.type !== undefined)       dbPatch.type        = patch.type
+   if (patch.category !== undefined)   dbPatch.category    = patch.category
+   if (patch.lastCost !== undefined)   dbPatch.last_cost   = patch.lastCost
+   if (patch.lastPrice !== undefined)  dbPatch.last_price  = patch.lastPrice
+diff --git a/app/actions/tenants.ts b/app/actions/tenants.ts
+index c3e1544..7d54635 100644
+--- a/app/actions/tenants.ts
++++ b/app/actions/tenants.ts
+@@ -161,8 +161,26 @@ export async function toggleTenantStatusAction(
+   id: string,
+   currentStatus: TenantStatus
+ ): Promise<TenantStatus> {
+-  const newStatus: TenantStatus = currentStatus === "active" ? "frozen" : "active"
+   const supabase = await createServerSupabase()
++
++  // حماية: يُمنع تجميد/تفعيل حساب مشرف المنصة نفسه
++  const { data: tenant } = await supabase
++    .from("tenants")
++    .select("auth_user_id")
++    .eq("id", id)
++    .single()
++  if (tenant?.auth_user_id) {
++    const { data: profile } = await supabase
++      .from("profiles")
++      .select("system_role")
++      .eq("id", tenant.auth_user_id)
++      .single()
++    if (profile?.system_role === "owner") {
++      throw new Error("لا يمكن تجميد حساب مشرف المنصة")
++    }
++  }
++
++  const newStatus: TenantStatus = currentStatus === "active" ? "frozen" : "active"
+   const { error } = await supabase
+     .from("tenants")
+     .update({ status: newStatus })
+@@ -183,6 +201,18 @@ export async function deleteTenantAction(id: string): Promise<void> {
+     .eq("id", id)
+     .single()
+ 
++  // حماية: يُمنع حذف حساب مشرف المنصة نفسه مهما كان مصدر الطلب
++  if (tenant?.auth_user_id) {
++    const { data: profile } = await supabase
++      .from("profiles")
++      .select("system_role")
++      .eq("id", tenant.auth_user_id)
++      .single()
++    if (profile?.system_role === "owner") {
++      throw new Error("لا يمكن حذف حساب مشرف المنصة")
++    }
++  }
++
+   const { error } = await supabase.from("tenants").delete().eq("id", id)
+   if (error) throw new Error(error.message)
+ 
+diff --git a/components/client/catalog-tab.tsx b/components/client/catalog-tab.tsx
+index 4c86594..6a3f5b8 100644
+--- a/components/client/catalog-tab.tsx
++++ b/components/client/catalog-tab.tsx
+@@ -4,14 +4,15 @@ import { useMemo, useState } from "react"
+ import { Pencil, Trash2, PackagePlus, Tag } from "lucide-react"
+ import { useClientStore } from "@/lib/store"
+ import { unitLabel, unitShort } from "@/lib/units"
+-import type { Product, UnitCode } from "@/lib/types"
++import type { Product, UnitCode, ProductType } from "@/lib/types"
++import { PRODUCT_TYPE_META } from "@/lib/constants"
+ import { SectionCard, EmptyState, Btn, Modal, Field, TextInput, SelectInput } from "./ui"
+ import { UnitSelect } from "./unit-select"
+ import { cn } from "@/lib/utils"
+ 
+ /* ── نموذج إضافة/تعديل صنف ────────────────────────────────────────── */
+ const emptyForm = {
+-  name: "", sku: "", unit: "pcs" as UnitCode,
++  name: "", sku: "", unit: "pcs" as UnitCode, type: "product" as ProductType,
+   category: "", lastCost: "", lastPrice: "", notes: "",
+ }
+ 
+@@ -21,7 +22,7 @@ function ProductModal({ open, onClose, editProduct }: {
+   const { addProduct, updateProduct, tenantId } = useClientStore()
+   const [form, setForm] = useState(editProduct ? {
+     name: editProduct.name, sku: editProduct.sku, unit: editProduct.unit,
+-    category: editProduct.category, lastCost: String(editProduct.lastCost),
++    type: editProduct.type, category: editProduct.category, lastCost: String(editProduct.lastCost),
+     lastPrice: String(editProduct.lastPrice), notes: editProduct.notes,
+   } : { ...emptyForm })
+ 
+@@ -35,6 +36,7 @@ function ProductModal({ open, onClose, editProduct }: {
+       name: form.name.trim(),
+       sku: form.sku.trim().toUpperCase(),
+       unit: form.unit,
++      type: form.type,
+       category: form.category.trim(),
+       lastCost: Number(form.lastCost) || 0,
+       lastPrice: Number(form.lastPrice) || 0,
+@@ -84,6 +86,31 @@ function ProductModal({ open, onClose, editProduct }: {
+           />
+         </Field>
+ 
++        <div className="sm:col-span-2">
++          <Field label="نوع الصنف">
++            <div className="grid grid-cols-3 gap-2">
++              {(Object.keys(PRODUCT_TYPE_META) as ProductType[]).map((t) => {
++                const meta = PRODUCT_TYPE_META[t]
++                return (
++                  <button
++                    key={t} type="button"
++                    onClick={() => setForm((f) => ({ ...f, type: t }))}
++                    className={cn(
++                      "rounded-xl border p-3 text-right transition",
++                      form.type === t
++                        ? "border-primary bg-primary/5"
++                        : "border-border hover:bg-muted"
++                    )}
++                  >
++                    <p className="text-sm font-semibold text-foreground">{meta.label}</p>
++                    <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">{meta.hint}</p>
++                  </button>
++                )
++              })}
++            </div>
++          </Field>
++        </div>
++
+         <Field label="التصنيف / المجموعة">
+           <TextInput
+             value={form.category}
+@@ -209,6 +236,9 @@ export function CatalogTab({ search }: { search: string }) {
+                       <div className="flex items-center gap-2 flex-wrap">
+                         <p className="font-semibold text-foreground">{prod.name}</p>
+                         <span className="font-mono text-xs bg-muted rounded px-1.5 py-0.5 text-muted-foreground">{prod.sku}</span>
++                        <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium", PRODUCT_TYPE_META[prod.type]?.color)}>
++                          {PRODUCT_TYPE_META[prod.type]?.label ?? prod.type}
++                        </span>
+                       </div>
+                       <p className="text-xs text-muted-foreground mt-0.5">
+                         الوحدة: <strong className="text-foreground">{unitLabel(prod.unit)}</strong>
+diff --git a/components/client/client-shell.tsx b/components/client/client-shell.tsx
+index fe850b1..1ec8655 100644
+--- a/components/client/client-shell.tsx
++++ b/components/client/client-shell.tsx
+@@ -7,6 +7,7 @@ import { ClientSidebar } from "./client-sidebar"
+ import { ClientTopbar } from "./client-topbar"
+ import { OverviewTab } from "./overview-tab"
+ import { CatalogTab } from "./catalog-tab"
++import { InventoryTab } from "./inventory-tab"
+ import { SalesTab } from "./sales-tab"
+ import { PurchasesTab } from "./purchases-tab"
+ import { CustomersTab } from "./customers-tab"
+@@ -142,6 +143,7 @@ function ClientApp({ tenantId }: { tenantId: string }) {
+               >
+                 {activeTab === "overview"  && <OverviewTab />}
+                 {activeTab === "catalog"   && <CatalogTab search={search} />}
++                {activeTab === "inventory" && <InventoryTab search={search} />}
+                 {activeTab === "sales"     && <SalesTab search={search} />}
+                 {activeTab === "purchases" && <PurchasesTab search={search} />}
+                 {activeTab === "customers" && <CustomersTab search={search} />}
+diff --git a/components/client/client-sidebar.tsx b/components/client/client-sidebar.tsx
+index 1f28240..c1552b0 100644
+--- a/components/client/client-sidebar.tsx
++++ b/components/client/client-sidebar.tsx
+@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "framer-motion"
+ import {
+   BarChart3, BookText, ChevronRight, LayoutDashboard,
+   PackagePlus, PanelRight, Receipt, Users, UsersRound,
+-  Calculator, Archive,
++  Calculator, Archive, Warehouse,
+ } from "lucide-react"
+ import { cn } from "@/lib/utils"
+ import type { TabId } from "@/lib/constants"
+@@ -14,6 +14,7 @@ import type { LucideIcon } from "lucide-react"
+ const TAB_ICONS: Record<TabId, LucideIcon> = {
+   overview:  LayoutDashboard,
+   catalog:   Archive,
++  inventory: Warehouse,
+   sales:     Receipt,
+   purchases: PackagePlus,
+   customers: Users,
+diff --git a/components/client/inventory-tab.tsx b/components/client/inventory-tab.tsx
+new file mode 100644
+index 0000000..805edf9
+--- /dev/null
++++ b/components/client/inventory-tab.tsx
+@@ -0,0 +1,238 @@
++"use client"
++
++import { useMemo, useState } from "react"
++import { Boxes, PackageCheck, PackageX, PlusCircle, AlertTriangle, Search } from "lucide-react"
++import { useClientStore } from "@/lib/store"
++import { unitShort } from "@/lib/units"
++import { PRODUCT_TYPE_META } from "@/lib/constants"
++import type { Product } from "@/lib/types"
++import { SectionCard, EmptyState, StatCard, Btn, Modal, Field, TextInput } from "./ui"
++import { cn } from "@/lib/utils"
++
++/* ── نموذج تسجيل رصيد أولي / تسوية مخزون ─────────────────────────── */
++function OpeningBalanceModal({ open, onClose }: { open: boolean; onClose: () => void }) {
++  const { products, addPurchase, currentTenantUser, today } = useClientStore()
++  const [productId, setProductId] = useState("")
++  const [quantity, setQuantity] = useState("")
++  const [cost, setCost] = useState("")
++  const [search, setSearch] = useState("")
++  const [showList, setShowList] = useState(false)
++
++  const trackable = useMemo(
++    () => products.filter((p) => PRODUCT_TYPE_META[p.type]?.tracksStock !== false),
++    [products]
++  )
++  const filtered = useMemo(() => {
++    const q = search.trim().toLowerCase()
++    if (!q) return trackable
++    return trackable.filter((p) => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q))
++  }, [trackable, search])
++
++  const selected = trackable.find((p) => p.id === productId) || null
++  const canSubmit = !!selected && Number(quantity) > 0
++
++  function reset() {
++    setProductId(""); setQuantity(""); setCost(""); setSearch(""); setShowList(false)
++  }
++
++  function handleSave() {
++    if (!selected || !canSubmit) return
++    addPurchase({
++      itemName: selected.name,
++      sku: selected.sku,
++      unit: selected.unit,
++      supplier: "رصيد افتتاحي",
++      quantity: Number(quantity),
++      unitCost: Number(cost) || selected.lastCost || 0,
++      warehouse: "",
++      batch: "رصيد أولي",
++      date: today,
++      userId: currentTenantUser?.id ?? "",
++    })
++    reset()
++    onClose()
++  }
++
++  return (
++    <Modal
++      open={open}
++      onClose={() => { reset(); onClose() }}
++      title="تسجيل رصيد مخزون (بضاعة موجودة مسبقاً)"
++      footer={
++        <>
++          <Btn variant="outline" onClick={() => { reset(); onClose() }}>إلغاء</Btn>
++          <Btn disabled={!canSubmit} onClick={handleSave}>
++            <PlusCircle className="size-4" />إضافة إلى المخزون
++          </Btn>
++        </>
++      }
++    >
++      <div className="space-y-4">
++        <p className="text-xs text-muted-foreground bg-muted/40 rounded-xl px-4 py-3 leading-relaxed">
++          استخدم هذا الخيار عندما يبدأ عميل بتسجيل بضاعة موجودة عنده مسبقاً بالمحل.
++          فقط سجّل <strong>الكمية الحالية</strong> — سعر الشراء اختياري، إذا لم تتذكره اتركه فارغاً.
++        </p>
++
++        <Field label="اختر الصنف">
++          <button
++            type="button"
++            onClick={() => setShowList((v) => !v)}
++            className="w-full h-10 rounded-xl border border-dashed border-primary/40 bg-primary/5 text-sm font-medium text-primary hover:bg-primary/10 transition flex items-center justify-center gap-2"
++          >
++            <Search className="size-4" />
++            {selected ? `${selected.name} (${unitShort(selected.unit)})` : "ابحث عن صنف من الكتالوج"}
++          </button>
++
++          {showList && (
++            <div className="mt-2 rounded-xl border border-border bg-popover shadow-lg overflow-hidden">
++              <div className="p-2 border-b border-border">
++                <input
++                  autoFocus
++                  value={search}
++                  onChange={(e) => setSearch(e.target.value)}
++                  placeholder="ابحث بالاسم أو الكود..."
++                  className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm focus:outline-none focus:border-ring"
++                />
++              </div>
++              <div className="max-h-48 overflow-y-auto divide-y divide-border">
++                {filtered.length === 0 ? (
++                  <p className="px-4 py-3 text-xs text-muted-foreground">لا توجد أصناف تُتابع بالمخزون — أضف صنفاً من "كتالوج الأصناف" أولاً</p>
++                ) : filtered.map((p) => (
++                  <button
++                    key={p.id} type="button"
++                    onClick={() => { setProductId(p.id); setShowList(false); setSearch("") }}
++                    className="w-full flex items-center justify-between px-4 py-2.5 text-right hover:bg-muted transition"
++                  >
++                    <p className="text-sm font-medium text-foreground">{p.name}</p>
++                    <span className="font-mono text-xs text-muted-foreground">{p.sku}</span>
++                  </button>
++                ))}
++              </div>
++            </div>
++          )}
++        </Field>
++
++        <div className="grid grid-cols-2 gap-4">
++          <Field label={`الكمية الحالية ${selected ? `(${unitShort(selected.unit)})` : ""}`}>
++            <TextInput
++              type="number" min={0.01} step="0.01"
++              value={quantity}
++              onChange={(e) => setQuantity(e.target.value)}
++              placeholder="0"
++            />
++          </Field>
++          <Field label="سعر الشراء (اختياري)">
++            <TextInput
++              type="number" min={0} step="0.01"
++              value={cost}
++              onChange={(e) => setCost(e.target.value)}
++              placeholder="اتركه فارغاً إذا لم تتذكر"
++            />
++          </Field>
++        </div>
++      </div>
++    </Modal>
++  )
++}
++
++/* ── الصفحة الرئيسية للمخزون ──────────────────────────────────────── */
++export function InventoryTab({ search }: { search: string }) {
++  const { stock, products, fmt } = useClientStore()
++  const [modalOpen, setModalOpen] = useState(false)
++
++  // ربط عناصر المخزون بنوع الصنف من الكتالوج (لإخفاء الخدمات/الحرف التي لا تُتابع كمخزون)
++  const productBySku = useMemo(() => {
++    const map = new Map<string, Product>()
++    for (const p of products) map.set(p.sku, p)
++    return map
++  }, [products])
++
++  const rows = useMemo(() => {
++    const q = search.trim().toLowerCase()
++    return stock
++      .filter((s) => {
++        const prod = productBySku.get(s.sku)
++        // اعرض فقط الأصناف القابلة للتتبع (منتج/بضاعة)؛ الأصناف غير الموجودة بالكتالوج تُعرض أيضاً احتياطاً
++        return !prod || PRODUCT_TYPE_META[prod.type]?.tracksStock !== false
++      })
++      .filter((s) => !q || s.itemName.toLowerCase().includes(q) || s.sku.toLowerCase().includes(q))
++      .sort((a, b) => a.balance - b.balance)
++  }, [stock, productBySku, search])
++
++  const stats = useMemo(() => {
++    const low = rows.filter((r) => r.balance <= 0).length
++    const totalValue = rows.reduce((acc, r) => acc + Math.max(0, r.balance) * (r.lastCost || 0), 0)
++    return { items: rows.length, low, totalValue }
++  }, [rows])
++
++  return (
++    <div className="space-y-6">
++      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
++        <StatCard label="أصناف بالمخزون"     value={String(stats.items)}   icon={Boxes}      tone="primary" />
++        <StatCard label="نافدة أو سالبة"     value={String(stats.low)}     icon={PackageX}   tone="danger"  />
++        <StatCard label="قيمة المخزون التقديرية" value={fmt(stats.totalValue)} icon={PackageCheck} tone="success" />
++      </div>
++
++      <SectionCard
++        title="أرصدة المخزون"
++        description="يُحدَّث تلقائياً مع كل عملية بيع أو شراء — يمكنك أيضاً تسجيل بضاعة موجودة مسبقاً"
++        action={
++          <Btn onClick={() => setModalOpen(true)}>
++            <PlusCircle className="size-4" />تسجيل بضاعة موجودة
++          </Btn>
++        }
++      >
++        {rows.length === 0 ? (
++          <EmptyState message="لا توجد حركات مخزون بعد — سجّل مشتريات أو بضاعة موجودة لديك للبدء" />
++        ) : (
++          <div className="overflow-x-auto">
++            <table className="w-full min-w-[760px] text-sm">
++              <thead>
++                <tr className="border-b border-border text-xs font-medium uppercase tracking-wide text-muted-foreground">
++                  <th className="px-5 py-3 text-right">الصنف</th>
++                  <th className="px-5 py-3 text-right">الوارد</th>
++                  <th className="px-5 py-3 text-right">الصادر</th>
++                  <th className="px-5 py-3 text-right">الرصيد الحالي</th>
++                  <th className="px-5 py-3 text-right">آخر تكلفة</th>
++                  <th className="px-5 py-3 text-right">آخر سعر بيع</th>
++                </tr>
++              </thead>
++              <tbody className="divide-y divide-border">
++                {rows.map((r) => {
++                  const isLow = r.balance <= 0
++                  return (
++                    <tr key={r.sku} className={cn("hover:bg-muted/40 transition", isLow && "bg-danger/5")}>
++                      <td className="px-5 py-3.5">
++                        <p className="font-medium text-foreground">{r.itemName}</p>
++                        <p className="font-mono text-xs text-muted-foreground">{r.sku}</p>
++                      </td>
++                      <td className="px-5 py-3.5 text-success tabular-nums">
++                        {r.incoming} <span className="text-xs text-muted-foreground">{unitShort(r.unit)}</span>
++                      </td>
++                      <td className="px-5 py-3.5 text-muted-foreground tabular-nums">
++                        {r.outgoing} <span className="text-xs">{unitShort(r.unit)}</span>
++                      </td>
++                      <td className="px-5 py-3.5">
++                        <span className={cn(
++                          "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold tabular-nums",
++                          isLow ? "bg-danger/10 text-danger" : "bg-success/10 text-success"
++                        )}>
++                          {isLow && <AlertTriangle className="size-3" />}
++                          {r.balance} {unitShort(r.unit)}
++                        </span>
++                      </td>
++                      <td className="px-5 py-3.5 text-muted-foreground tabular-nums">{fmt(r.lastCost)}</td>
++                      <td className="px-5 py-3.5 text-muted-foreground tabular-nums">{fmt(r.lastPrice)}</td>
++                    </tr>
++                  )
++                })}
++              </tbody>
++            </table>
++          </div>
++        )}
++      </SectionCard>
++
++      <OpeningBalanceModal open={modalOpen} onClose={() => setModalOpen(false)} />
++    </div>
++  )
++}
+diff --git a/components/owner/owner-shell.tsx b/components/owner/owner-shell.tsx
+index de508c6..92b4afd 100644
+--- a/components/owner/owner-shell.tsx
++++ b/components/owner/owner-shell.tsx
+@@ -169,15 +169,18 @@ export function OwnerShell() {
+     document.documentElement.classList.toggle("dark", theme === "dark")
+   }, [theme])
+ 
+-  const filtered = tenants.filter((t) =>
+-    [t.name, t.ownerName, t.email].some((v) => v.toLowerCase().includes(search.toLowerCase()))
+-  )
++  const filtered = tenants
++    .filter((t) => t.email !== authUser?.email) // إخفاء أي سجل خاص بحساب مشرف المنصة نفسه
++    .filter((t) =>
++      [t.name, t.ownerName, t.email].some((v) => v.toLowerCase().includes(search.toLowerCase()))
++    )
+ 
++  const realTenants = tenants.filter((t) => t.email !== authUser?.email)
+   const stats = {
+-    total: tenants.length,
+-    active: tenants.filter((t) => t.status === "active").length,
+-    trial:  tenants.filter((t) => t.status === "trial").length,
+-    expiringSoon: tenants.filter((t) => t.expiresAt <= SOON && t.status === "active").length,
++    total: realTenants.length,
++    active: realTenants.filter((t) => t.status === "active").length,
++    trial:  realTenants.filter((t) => t.status === "trial").length,
++    expiringSoon: realTenants.filter((t) => t.expiresAt <= SOON && t.status === "active").length,
+   }
+ 
+   async function handleSave(data: typeof emptyForm) {
+@@ -197,14 +200,22 @@ export function OwnerShell() {
+ 
+   async function handleToggle(id: string) {
+     setActionId(id)
+-    await toggleTenantStatus(id)
++    try {
++      await toggleTenantStatus(id)
++    } catch (e: any) {
++      alert(e?.message || "تعذّر تنفيذ العملية")
++    }
+     setActionId(null)
+   }
+ 
+   async function handleDelete(id: string) {
+     if (!confirm("هل أنت متأكد من حذف هذا العميل؟ سيتم حذف جميع بياناته نهائياً.")) return
+     setActionId(id)
+-    await deleteTenant(id)
++    try {
++      await deleteTenant(id)
++    } catch (e: any) {
++      alert(e?.message || "تعذّر تنفيذ العملية")
++    }
+     setActionId(null)
+   }
+ 
+diff --git a/lib/constants.ts b/lib/constants.ts
+index 1cf187a..4bc3a32 100644
+--- a/lib/constants.ts
++++ b/lib/constants.ts
+@@ -1,8 +1,9 @@
+-import type { ClientRole, SubscriptionPlan, TenantStatus } from "./types"
++import type { ClientRole, SubscriptionPlan, TenantStatus, ProductType } from "./types"
+ 
+ export type TabId =
+   | "overview"
+   | "catalog"
++  | "inventory"
+   | "customers"
+   | "purchases"
+   | "sales"
+@@ -20,12 +21,19 @@ export const ROLE_META: Record<ClientRole, { label: string; tint: string }> = {
+ }
+ 
+ export const ROLE_TABS: Record<ClientRole, TabId[]> = {
+-  admin:      ["overview", "catalog", "customers", "purchases", "sales", "ledger", "reports", "users"],
+-  accountant: ["overview", "catalog", "customers", "purchases", "sales", "ledger", "reports"],
+-  inventory:  ["overview", "catalog", "purchases", "ledger"],
++  admin:      ["overview", "catalog", "inventory", "customers", "purchases", "sales", "ledger", "reports", "users"],
++  accountant: ["overview", "catalog", "inventory", "customers", "purchases", "sales", "ledger", "reports"],
++  inventory:  ["overview", "catalog", "inventory", "purchases", "ledger"],
+   cashier:    ["catalog", "sales"],
+ }
+ 
++// نوع الصنف: يحدد هل يُتابَع له رصيد مخزون أم لا
++export const PRODUCT_TYPE_META: Record<ProductType, { label: string; hint: string; color: string; tracksStock: boolean }> = {
++  product: { label: "منتج جاهز",        hint: "قطعة/عبوة جاهزة، يُتابع رصيدها",              color: "bg-blue-100 text-blue-700",   tracksStock: true  },
++  goods:   { label: "بضاعة عامة",       hint: "وزن أو حجم أو أي بضاعة عامة، يُتابع رصيدها",  color: "bg-amber-100 text-amber-700", tracksStock: true  },
++  service: { label: "حرفة / خدمة",      hint: "عمل يُحسب بالوحدة (متر، ساعة...) بلا مخزون",  color: "bg-purple-100 text-purple-700", tracksStock: false },
++}
++
+ export const CAN_VIEW_PROFIT: ClientRole[] = ["admin", "accountant"]
+ export const CAN_MANAGE_USERS: ClientRole[] = ["admin"]
+ export const CAN_EDIT_COSTS: ClientRole[] = ["admin", "accountant", "inventory"]
+@@ -50,6 +58,7 @@ export const CURRENCIES: { code: string; symbol: string; label: string }[] = [
+ export const TAB_LABELS: Record<TabId, string> = {
+   overview:  "نظرة عامة",
+   catalog:   "كتالوج الأصناف",
++  inventory: "المخزون",
+   sales:     "المبيعات / POS",
+   purchases: "المشتريات",
+   customers: "العملاء والذمم",
+diff --git a/lib/types.ts b/lib/types.ts
+index 90f5e75..14aef95 100644
+--- a/lib/types.ts
++++ b/lib/types.ts
+@@ -68,12 +68,16 @@ export type UnitCode =
+   | "day"    // يوم (خدمات)
+ 
+ // --- Product Catalog (كتالوج الأصناف) ---
++// نوع الصنف: منتج جاهز (كمية بالقطعة) / بضاعة عامة (وزن أو حجم) / حرفة يدوية أو خدمة (تُحسب بالوحدة، بلا مخزون)
++export type ProductType = "product" | "goods" | "service"
++
+ export interface Product {
+   id: string
+   tenantId: string
+   name: string          // اسم الصنف
+   sku: string           // كود
+   unit: UnitCode        // وحدة القياس
++  type: ProductType      // نوع الصنف
+   category: string      // تصنيف (اختياري)
+   lastCost: number      // آخر سعر شراء
+   lastPrice: number     // آخر سعر بيع
