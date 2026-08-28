@@ -1,6 +1,12 @@
 "use client"
 
-import { useEffect } from "react"
+// ================================================================
+// app/page.tsx — الموجّه الرئيسي
+// ================================================================
+// إصلاح: ClientShell لم تعد تستقبل prop اسمه tenantId — صارت
+// تقرأ المستخدم من useAuth() مباشرة. تمرير prop غير معرَّف كان
+// خطأ في TypeScript وسبب ارتباك في الترتيب.
+
 import { AuthProvider, OwnerStoreProvider, useAuth } from "@/lib/store"
 import { LoginPage } from "@/components/auth/login-page"
 import { OwnerShell } from "@/components/owner/owner-shell"
@@ -13,7 +19,8 @@ function AppRouter() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <svg className="animate-spin size-10 text-primary" viewBox="0 0 24 24" fill="none">
-          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <circle className="opacity-25" cx="12" cy="12" r="10"
+                  stroke="currentColor" strokeWidth="4" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
         </svg>
       </div>
@@ -22,7 +29,7 @@ function AppRouter() {
 
   if (!authUser) return <LoginPage />
   if (authUser.systemRole === "owner") return <OwnerShell />
-  return <ClientShell tenantId={authUser.tenantId!} />
+  return <ClientShell />
 }
 
 export default function Page() {
