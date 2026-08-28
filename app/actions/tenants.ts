@@ -10,6 +10,7 @@
 
 import { createServerSupabase, createServiceClient } from "@/lib/supabase/server"
 import { requireOwner } from "@/lib/auth/guard"
+import { createConfirmedAuthUser } from "@/lib/auth/create-auth-user"
 import type { Tenant, SubscriptionPlan, TenantStatus } from "@/lib/types"
 
 interface TenantRow {
@@ -89,26 +90,28 @@ export async function addTenantAction(input: {
   }
 
   const adminClient = createServiceClient()
-  const username = input.ownerName.trim().toLowerCase().replace(/\s+/g, "_")
 
-  const { data: newUser, error: userError } = await adminClient.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    user_metadata: { full_name: input.ownerName, username, system_role: "client" },
-  })
-
-  if (userError || !newUser.user) {
-    return { tenant: {} as Tenant, error: `خطأ في إنشاء الحساب: ${userError?.message}` }
+  let authUserId: string
+  let username: string
+  try {
+    const created = await createConfirmedAuthUser(adminClient, {
+      email,
+      password,
+      fullName: input.ownerName,
+      preferredUsername: input.ownerName,
+    })
+    authUserId = created.id
+    username = created.username
+  } catch (e) {
+    return { tenant: {} as Tenant, error: e instanceof Error ? e.message : "خطأ في إنشاء الحساب" }
   }
-
-  const authUserId = newUser.user.id
 
   const { error: profileError } = await adminClient.from("profiles").upsert({
     id: authUserId,
     username,
     full_name: input.ownerName,
     system_role: "client",
+    must_change_password: true,
   })
 
   if (profileError) {
