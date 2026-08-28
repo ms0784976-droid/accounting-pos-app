@@ -17,6 +17,7 @@ import { requestPasswordResetAction, completePasswordResetAction } from "@/app/a
 import { getClient } from "@/lib/supabase/client"
 import {
   Eye, EyeOff, Lock, User, Calculator, Mail, ArrowRight, CheckCircle2,
+  Phone, MessageCircle,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -63,9 +64,7 @@ export function LoginPage() {
           {screen === "reset"  && <ResetForm onDone={() => setScreen("login")} />}
         </div>
 
-        <p className="text-center text-blue-400/40 text-xs mt-6">
-          مُحاسِب © 2026 — جميع الحقوق محفوظة
-        </p>
+        <SupportFooter />
       </div>
     </div>
   )
@@ -447,6 +446,55 @@ function ResetForm({ onDone }: { onDone: () => void }) {
         </SubmitBtn>
       </form>
     </>
+  )
+}
+
+/* ================================================================ */
+/* الدعم الفني                                                       */
+/* ================================================================ */
+// موضوع أسفل البطاقة لا فوقها: لا يزاحم حقول الدخول، ويبقى ظاهراً
+// لمن يحتاجه. الرقم رابط فعلي — نقرة واحدة تتصل أو تفتح واتساب،
+// وهذا أهم من مجرد عرضه كنص على الهاتف.
+
+const SUPPORT_NAME = "محمد سعد"
+const SUPPORT_PHONE = "0569198115"
+const SUPPORT_INTL = "970569198115"   // للواتساب — بلا صفر وبمقدمة الدولة
+
+function SupportFooter() {
+  return (
+    <div className="mt-6 text-center space-y-3">
+      <div className="flex items-center justify-center gap-2">
+        <a
+          href={`tel:+${SUPPORT_INTL}`}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-white/10
+                     bg-white/5 px-3 py-1.5 text-xs text-blue-200
+                     hover:bg-white/10 hover:text-white transition"
+        >
+          <Phone className="size-3.5" />
+          <span dir="ltr" className="tabular-nums">{SUPPORT_PHONE}</span>
+        </a>
+
+        <a
+          href={`https://wa.me/${SUPPORT_INTL}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/20
+                     bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-300
+                     hover:bg-emerald-500/20 hover:text-emerald-200 transition"
+        >
+          <MessageCircle className="size-3.5" />
+          واتساب
+        </a>
+      </div>
+
+      <p className="text-blue-400/50 text-[11px]">
+        للدعم الفني: {SUPPORT_NAME}
+      </p>
+
+      <p className="text-blue-400/30 text-[11px]">
+        مُحاسِب © 2026 — جميع الحقوق محفوظة
+      </p>
+    </div>
   )
 }
 
