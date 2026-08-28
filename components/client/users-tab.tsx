@@ -1,178 +1,422 @@
 "use client"
 
-import { useMemo, useState } from "react"
-import { Pencil, ShieldPlus, Trash2, CheckCircle, XCircle } from "lucide-react"
-import { useClientStore } from "@/lib/store"
-import { SectionCard, EmptyState, RoleBadge, Btn, Modal, Field, TextInput, SelectInput } from "./ui"
+// ================================================================
+// المستخدمون والصلاحيات
+// ================================================================
+// الصلاحيات هنا وصف لما يُفرض على السيرفر، لا مصدره. حتى لو تجاوز
+// أحد هذه الشاشة، كل Server Action يفحص الدور بنفسه قبل التنفيذ.
+
+import { useState, useMemo } from "react"
+import { useSession, useAsyncData } from "@/lib/session"
+import {
+  fetchTenantUsersAction, addTenantUserAction, updateTenantUserAction,
+  toggleTenantUserStatusAction, deleteTenantUserAction,
+} from "@/app/actions/client-data"
+import {
+  PageHeader, SectionCard, DataTable, Th, Td, Tr, Badge,
+  EmptyState, TableSkeleton, InlineError, InfoNote, Modal, ConfirmDialog,
+  Field, TextInput, SelectInput, SearchBox, StatCard, Btn, IconBtn,
+  useToast, formatDate,
+} from "./ui"
+import { ROLE_META, PLAN_META, ROLE_TABS, TAB_LABELS } from "@/lib/constants"
 import type { ClientRole, TenantUser } from "@/lib/types"
-import { cn } from "@/lib/utils"
+import { resetUserPasswordAction } from "@/app/actions/account"
+import { Plus, Pencil, Trash2, UserCog, ShieldCheck, Snowflake, Play, KeyRound } from "lucide-react"
 
-const ROLES: { value: ClientRole; label: string }[] = [
-  { value: "admin",      label: "مدير النظام" },
-  { value: "accountant", label: "محاسب" },
-  { value: "inventory",  label: "أمين المخزن" },
-  { value: "cashier",    label: "كاشير" },
-]
+export function UsersTab() {
+  const { company, user, can } = useSession()
+  const { notify } = useToast()
 
-const emptyForm = { name: "", username: "", email: "", role: "cashier" as ClientRole, tempPassword: "" }
+  const [search, setSearch] = useState("")
+  const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState<TenantUser | null>(null)
+  const [deleting, setDeleting] = useState<TenantUser | null>(null)
+  const [resetting, setResetting] = useState<TenantUser | null>(null)
 
-function UserModal({ open, onClose, editUser, onSave }: {
-  open: boolean; onClose: () => void; editUser?: TenantUser; onSave: (f: typeof emptyForm) => void
-}) {
-  const [form, setForm] = useState(editUser ? {
-    name: editUser.name, username: editUser.username, email: editUser.email,
-    role: editUser.role, tempPassword: editUser.tempPassword ?? "",
-  } : { ...emptyForm })
+  const users = useAsyncData(() => fetchTenantUsersAction(), [])
 
-  const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }))
+  const rows = useMemo(() => {
+    let list = users.data ?? []
+    if (search.trim()) {
+      const q = search.trim().toLowerCase()
+      list = list.filter(
+        (u) =>
+          u.name.toLowerCase().includes(q) ||
+          u.username.toLowerCase().includes(q) ||
+          u.email.toLowerCase().includes(q)
+      )
+    }
+    return list
+  }, [users.data, search])
+
+  const maxUsers = company ? PLAN_META[company.plan].maxUsers : 3
+  const activeCount = (users.data ?? []).filter((u) => u.status === "active").length
+  const atLimit = (users.data?.length ?? 0) >= maxUsers
+
+  const toggle = async (u: TenantUser) => {
+    try {
+      await toggleTenantUserStatusAction(u.id, u.status)
+      users.reload()
+      notify(u.status === "active" ? "تم تجميد المستخدم" : "تم تفعيل المستخدم")
+    } catch (e) {
+      notify(e instanceof Error ? e.message : "تعذّر التنفيذ", "error")
+    }
+  }
+
+  if (!can("manageUsers")) {
+    return (
+      <EmptyState
+        icon={UserCog}
+        message="إدارة المستخدمين متاحة لمدير النظام فقط"
+      />
+    )
+  }
 
   return (
-    <Modal open={open} onClose={onClose} title={editUser ? "تعديل بيانات الموظف" : "إضافة موظف جديد"}
-      footer={<>
-        <Btn variant="outline" onClick={onClose}>إلغاء</Btn>
-        <Btn onClick={() => { if (form.name.trim() && form.username.trim()) { onSave(form); onClose() } }}>
-          {editUser ? "حفظ التعديلات" : "إضافة الموظف"}
-        </Btn>
-      </>}
+    <div className="space-y-5">
+      <PageHeader
+        title="المستخدمون"
+        subtitle="كل مستخدم بحساب دخول مستقل ودور محدد"
+        actions={
+          <Btn icon={Plus} onClick={() => setCreating(true)} disabled={atLimit}>
+            مستخدم جديد
+          </Btn>
+        }
+      />
+
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-3">
+        <StatCard label="المستخدمون" value={`${users.data?.length ?? 0} / ${maxUsers}`}
+                  hint={company ? `خطة ${PLAN_META[company.plan].label}` : undefined}
+                  tone={atLimit ? "warning" : "neutral"} icon={UserCog} />
+        <StatCard label="نشطون" value={String(activeCount)} icon={ShieldCheck} />
+        <StatCard label="مجمّدون"
+                  value={String((users.data?.length ?? 0) - activeCount)}
+                  icon={Snowflake} />
+      </div>
+
+      {atLimit && (
+        <InlineError message={`بلغت الحد الأقصى لخطتك (${maxUsers} مستخدمين). رقّ خطتك لإضافة المزيد.`} />
+      )}
+
+      <SectionCard>
+        <div className="px-5 pt-4 pb-3">
+          <div className="w-full sm:w-72">
+            <SearchBox value={search} onChange={setSearch} placeholder="الاسم أو اسم المستخدم…" />
+          </div>
+        </div>
+
+        {users.error && <div className="px-5 pb-4"><InlineError message={users.error} /></div>}
+
+        {users.loading ? (
+          <TableSkeleton rows={4} cols={5} />
+        ) : !rows.length ? (
+          <EmptyState message="لا مستخدمين" />
+        ) : (
+          <DataTable>
+            <thead className="sticky-head">
+              <tr>
+                <Th>الاسم</Th>
+                <Th width="140px">اسم المستخدم</Th>
+                <Th width="130px">الدور</Th>
+                <Th width="90px">الحالة</Th>
+                <Th width="100px">أُضيف</Th>
+                <Th align="center" width="110px">إجراءات</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((u) => {
+                const isSelf = u.email === user.email
+                const meta = ROLE_META[u.role]
+                return (
+                  <Tr key={u.id} muted={u.status !== "active"}>
+                    <Td>
+                      <div className="text-sm font-medium">
+                        {u.name}
+                        {isSelf && (
+                          <span className="mr-2 text-[10px] text-primary">(أنت)</span>
+                        )}
+                      </div>
+                      {u.email && (
+                        <div className="text-[10px] text-muted-foreground" dir="ltr"
+                             style={{ textAlign: "right" }}>{u.email}</div>
+                      )}
+                    </Td>
+                    <Td mono className="text-xs text-muted-foreground">{u.username}</Td>
+                    <Td>
+                      <Badge label={meta.label} tint={meta.tint} />
+                      <div className="text-[10px] text-muted-foreground mt-0.5">{meta.hint}</div>
+                    </Td>
+                    <Td>
+                      <Badge
+                        label={u.status === "active" ? "نشط" : "مجمّد"}
+                        tint={u.status === "active"
+                          ? "bg-success/10 text-success"
+                          : "bg-muted text-muted-foreground"}
+                      />
+                    </Td>
+                    <Td mono className="text-xs">{formatDate(u.createdAt)}</Td>
+                    <Td align="center">
+                      <div className="flex items-center justify-center gap-0.5">
+                        <IconBtn icon={Pencil} label="تعديل" onClick={() => setEditing(u)} />
+                        {!isSelf && (
+                          <>
+                            <IconBtn icon={KeyRound} label="إعادة تعيين كلمة المرور"
+                                     onClick={() => setResetting(u)} />
+                            <IconBtn
+                              icon={u.status === "active" ? Snowflake : Play}
+                              label={u.status === "active" ? "تجميد" : "تفعيل"}
+                              onClick={() => toggle(u)}
+                            />
+                            <IconBtn icon={Trash2} label="حذف" tone="danger"
+                                     onClick={() => setDeleting(u)} />
+                          </>
+                        )}
+                      </div>
+                    </Td>
+                  </Tr>
+                )
+              })}
+            </tbody>
+          </DataTable>
+        )}
+      </SectionCard>
+
+      <RolesLegend />
+
+      {(creating || editing) && (
+        <UserForm
+          user={editing}
+          onClose={() => { setCreating(false); setEditing(null) }}
+          onSaved={() => { users.reload(); notify("تم الحفظ") }}
+        />
+      )}
+
+      {resetting && (
+        <ResetPasswordModal
+          user={resetting}
+          onClose={() => setResetting(null)}
+          onDone={() => notify("تم تعيين كلمة مرور جديدة")}
+        />
+      )}
+
+      <ConfirmDialog
+        open={deleting !== null}
+        onClose={() => setDeleting(null)}
+        title="حذف المستخدم"
+        message={deleting
+          ? `سيُحذف "${deleting.name}" وحساب دخوله نهائياً. الحركات التي سجّلها تبقى في الدفاتر وسجل التدقيق.`
+          : ""}
+        confirmLabel="حذف"
+        onConfirm={async () => {
+          if (!deleting) return
+          await deleteTenantUserAction(deleting.id)
+          users.reload()
+          notify("تم حذف المستخدم")
+        }}
+      />
+    </div>
+  )
+}
+
+/* ── نموذج المستخدم ───────────────────────────────────────────── */
+
+function UserForm({ user, onClose, onSaved }: {
+  user: TenantUser | null
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const { user: current } = useSession()
+
+  const [name, setName] = useState(user?.name ?? "")
+  const [username, setUsername] = useState(user?.username ?? "")
+  const [email, setEmail] = useState(user?.email ?? "")
+  const [role, setRole] = useState<ClientRole>(user?.role ?? "cashier")
+  const [password, setPassword] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+
+  const isSelf = user?.email === current.email
+
+  const save = async () => {
+    setError("")
+    if (!name.trim())     { setError("الاسم مطلوب"); return }
+    if (!username.trim()) { setError("اسم المستخدم مطلوب"); return }
+
+    if (!user) {
+      if (!email.includes("@"))  { setError("البريد الإلكتروني غير صالح"); return }
+      if (password.length < 8)   { setError("كلمة المرور يجب أن تكون 8 أحرف على الأقل"); return }
+    }
+
+    setBusy(true)
+    try {
+      if (user) {
+        await updateTenantUserAction(user.id, {
+          name, username, email,
+          ...(isSelf ? {} : { role }),
+        })
+      } else {
+        await addTenantUserAction({
+          tenantId: "",           // يُشتق من الجلسة على السيرفر
+          name, username, email, role,
+          tempPassword: password,
+        })
+      }
+      onSaved()
+      onClose()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "تعذّر الحفظ")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      open onClose={onClose}
+      title={user ? `تعديل: ${user.name}` : "مستخدم جديد"}
+      footer={<><Btn variant="ghost" onClick={onClose}>إلغاء</Btn>
+               <Btn onClick={save} loading={busy}>حفظ</Btn></>}
     >
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Field label="الاسم الكامل"><TextInput value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="اسم الموظف" /></Field>
-        <Field label="اسم المستخدم"><TextInput value={form.username} onChange={(e) => set("username", e.target.value)} placeholder="username" /></Field>
-        <Field label="البريد الإلكتروني"><TextInput type="email" value={form.email} onChange={(e) => set("email", e.target.value)} placeholder="email@example.com" /></Field>
-        <Field label="الدور الوظيفي">
-          <SelectInput value={form.role} onChange={(e) => set("role", e.target.value)}>
-            {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-          </SelectInput>
-        </Field>
-        <div className="sm:col-span-2">
-          <Field label="كلمة مرور مؤقتة (اختياري)">
-            <TextInput value={form.tempPassword} onChange={(e) => set("tempPassword", e.target.value)} placeholder="اتركه فارغاً إذا لم تكن بحاجة لتغييرها" />
+      <div className="space-y-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="الاسم الكامل" required>
+            <TextInput value={name} onChange={(e) => setName(e.target.value)} />
+          </Field>
+          <Field label="اسم المستخدم" required hint="يُستخدم لتسجيل الدخول">
+            <TextInput value={username} onChange={(e) => setUsername(e.target.value)}
+                       dir="ltr" className="text-left" />
           </Field>
         </div>
+
+        <Field label="البريد الإلكتروني" required={!user}>
+          <TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                     dir="ltr" className="text-left" disabled={!!user} />
+        </Field>
+
+        {!user && (
+          <Field label="كلمة المرور المؤقتة" required
+                 hint="8 أحرف على الأقل — بلّغها للمستخدم واطلب منه تغييرها">
+            <TextInput type="text" value={password} onChange={(e) => setPassword(e.target.value)}
+                       dir="ltr" className="text-left" />
+          </Field>
+        )}
+
+        <Field
+          label="الدور"
+          required
+          hint={isSelf ? "لا يمكنك تغيير صلاحياتك بنفسك" : ROLE_META[role].hint}
+        >
+          <SelectInput value={role} onChange={(e) => setRole(e.target.value as ClientRole)}
+                       disabled={isSelf}>
+            {(Object.keys(ROLE_META) as ClientRole[]).map((r) => (
+              <option key={r} value={r}>{ROLE_META[r].label}</option>
+            ))}
+          </SelectInput>
+        </Field>
+
+        <div className="rounded-lg bg-muted/50 px-3 py-2.5">
+          <p className="text-[11px] text-muted-foreground mb-1.5">الشاشات المتاحة لهذا الدور</p>
+          <div className="flex flex-wrap gap-1">
+            {ROLE_TABS[role].map((t) => (
+              <span key={t} className="rounded bg-card border border-border px-1.5 py-0.5 text-[10px]">
+                {TAB_LABELS[t]}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {error && <InlineError message={error} />}
       </div>
     </Modal>
   )
 }
 
-export function UsersTab({ search }: { search: string }) {
-  const { tenantUsers, addTenantUser, updateTenantUser, toggleTenantUserStatus, deleteTenantUser, currentTenantUser } = useClientStore()
-  const [open, setOpen] = useState(false)
-  const [editUser, setEditUser] = useState<TenantUser | undefined>()
+/* ── شرح الأدوار ──────────────────────────────────────────────── */
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return tenantUsers
-    return tenantUsers.filter((u) =>
-      u.name.toLowerCase().includes(q) || u.username.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
-    )
-  }, [tenantUsers, search])
+function RolesLegend() {
+  return (
+    <SectionCard title="الأدوار والصلاحيات" padded>
+      <InfoNote>
+        إخفاء الشاشة في الواجهة ليس حماية. كل عملية تُفحص على السيرفر أيضاً،
+        فلا يمكن لكاشير تنفيذ إجراء محاسبي حتى لو وصل لرابطه.
+      </InfoNote>
+      <div className="grid gap-3 sm:grid-cols-2 mt-4">
+        {(Object.keys(ROLE_META) as ClientRole[]).map((r) => (
+          <div key={r} className="rounded-xl border border-border p-3">
+            <Badge label={ROLE_META[r].label} tint={ROLE_META[r].tint} />
+            <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
+              {ROLE_META[r].hint}
+            </p>
+          </div>
+        ))}
+      </div>
+    </SectionCard>
+  )
+}
 
-  function handleSave(form: typeof emptyForm) {
-    if (editUser) {
-      updateTenantUser(editUser.id, {
-        name: form.name.trim(), username: form.username.trim(),
-        email: form.email.trim(), role: form.role,
-        tempPassword: form.tempPassword.trim() || undefined,
-      })
-    } else {
-      addTenantUser({
-        tenantId: currentTenantUser.tenantId,
-        name: form.name.trim(), username: form.username.trim(),
-        email: form.email.trim(), role: form.role,
-        tempPassword: form.tempPassword.trim() || undefined,
-      })
+/* ── إعادة تعيين كلمة مرور مستخدم ─────────────────────────────── */
+
+function ResetPasswordModal({ user, onClose, onDone }: {
+  user: TenantUser
+  onClose: () => void
+  onDone: () => void
+}) {
+  const [password, setPassword] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+
+  const generate = () => {
+    // كلمة مؤقتة مقروءة: لا أحرف متشابهة تُربك النطق (0/O و 1/l)
+    const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
+    const bytes = new Uint32Array(12)
+    crypto.getRandomValues(bytes)
+    setPassword([...bytes].map((b) => chars[b % chars.length]).join(""))
+  }
+
+  const submit = async () => {
+    setError("")
+    setBusy(true)
+    try {
+      await resetUserPasswordAction(user.id, password)
+      onDone()
+      onClose()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "تعذّرت إعادة التعيين")
+    } finally {
+      setBusy(false)
     }
-    setEditUser(undefined)
   }
 
   return (
-    <>
-      <SectionCard
-        title="إدارة المستخدمين والصلاحيات"
-        description="إضافة وتعديل موظفي النشاط وأدوارهم"
-        action={<Btn onClick={() => { setEditUser(undefined); setOpen(true) }}><ShieldPlus className="size-4" />موظف جديد</Btn>}
-      >
-        {filtered.length === 0 ? <EmptyState message="لا يوجد موظفون يطابقون البحث" /> : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[700px] text-sm">
-              <thead>
-                <tr className="border-b border-border text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  <th className="px-5 py-3 text-right">الموظف</th>
-                  <th className="px-5 py-3 text-right">اسم المستخدم</th>
-                  <th className="px-5 py-3 text-right">الدور الوظيفي</th>
-                  <th className="px-5 py-3 text-right">الحالة</th>
-                  <th className="px-5 py-3 text-right">آخر نشاط</th>
-                  <th className="px-5 py-3 text-right">الإجراءات</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {filtered.map((u) => {
-                  const isSelf = u.id === currentTenantUser.id
-                  const initials = u.name.trim().split(/\s+/).map((n) => n[0]).slice(0, 2).join("")
-                  return (
-                    <tr key={u.id} className="hover:bg-muted/40 transition">
-                      <td className="px-5 py-3.5">
-                        <div className="flex items-center gap-3">
-                          <div className="size-9 rounded-full bg-primary/10 flex items-center justify-center text-xs font-bold text-primary shrink-0">
-                            {initials}
-                          </div>
-                          <div>
-                            <p className="font-semibold text-foreground">{u.name}</p>
-                            <p className="text-xs text-muted-foreground">{u.email}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-5 py-3.5 font-mono text-muted-foreground">{u.username}</td>
-                      <td className="px-5 py-3.5"><RoleBadge role={u.role} /></td>
-                      <td className="px-5 py-3.5">
-                        <span className={cn(
-                          "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium",
-                          u.status === "active" ? "bg-success/10 text-success" : "bg-danger/10 text-danger"
-                        )}>
-                          {u.status === "active" ? <CheckCircle className="size-3" /> : <XCircle className="size-3" />}
-                          {u.status === "active" ? "نشط" : "مجمّد"}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3.5 text-muted-foreground tabular-nums">{u.lastActive}</td>
-                      <td className="px-5 py-3.5">
-                        <div className="flex items-center gap-1">
-                          <button onClick={() => { setEditUser(u); setOpen(true) }}
-                            className="size-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground transition">
-                            <Pencil className="size-3.5" />
-                          </button>
-                          {!isSelf && (
-                            <>
-                              <button onClick={() => toggleTenantUserStatus(u.id)}
-                                className={cn("size-8 rounded-lg flex items-center justify-center transition",
-                                  u.status === "active"
-                                    ? "text-amber-600 hover:bg-amber-100 dark:hover:bg-amber-900/30"
-                                    : "text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30"
-                                )}>
-                                {u.status === "active" ? <XCircle className="size-3.5" /> : <CheckCircle className="size-3.5" />}
-                              </button>
-                              <button onClick={() => deleteTenantUser(u.id)}
-                                className="size-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 transition">
-                                <Trash2 className="size-3.5" />
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </SectionCard>
+    <Modal
+      open onClose={onClose}
+      title={`إعادة تعيين كلمة مرور: ${user.name}`}
+      footer={
+        <>
+          <Btn variant="ghost" onClick={onClose}>إلغاء</Btn>
+          <Btn onClick={submit} loading={busy} disabled={password.length < 8}>
+            تعيين
+          </Btn>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <InfoNote>
+          ستُطلب من المستخدم كلمة مرور جديدة عند أول دخول. بلّغه الكلمة المؤقتة
+          بقناة آمنة — لا ترسلها في مجموعة عامة.
+        </InfoNote>
 
-      <UserModal
-        open={open}
-        onClose={() => { setOpen(false); setEditUser(undefined) }}
-        editUser={editUser}
-        onSave={handleSave}
-      />
-    </>
+        <Field label="كلمة المرور المؤقتة" required
+               hint="8 أحرف على الأقل، وتحتوي حرفاً ورقماً">
+          <div className="flex gap-2">
+            <TextInput value={password} onChange={(e) => setPassword(e.target.value)}
+                       dir="ltr" className="text-left num" />
+            <Btn variant="outline" onClick={generate}>توليد</Btn>
+          </div>
+        </Field>
+
+        {error && <InlineError message={error} />}
+      </div>
+    </Modal>
   )
 }

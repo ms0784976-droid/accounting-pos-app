@@ -1,138 +1,172 @@
 "use client"
 
-import { AnimatePresence, motion } from "framer-motion"
-import {
-  BarChart3, BookText, ChevronRight, LayoutDashboard,
-  PackagePlus, PanelRight, Receipt, Users, UsersRound,
-  Calculator, Archive, Warehouse,
-} from "lucide-react"
+// ================================================================
+// الشريط الجانبي — قائمة مجمّعة بدل قائمة مسطّحة طويلة
+// ================================================================
+
+import { useState } from "react"
 import { cn } from "@/lib/utils"
-import type { TabId } from "@/lib/constants"
-import { TAB_LABELS } from "@/lib/constants"
-import type { LucideIcon } from "lucide-react"
+import { NAV_GROUPS, TAB_LABELS, type TabId } from "@/lib/constants"
+import { useSession } from "@/lib/session"
+import {
+  CircleUser,
+  LayoutDashboard, Package, Users, Wallet, Table2, ShoppingCart, Truck,
+  TrendingDown, TrendingUp, Receipt, Boxes, ClipboardCheck, BookOpen,
+  ScrollText, BarChart3, FileText, UserCog, Settings, History,
+  PanelRightClose, PanelRightOpen,
+} from "lucide-react"
 
-const TAB_ICONS: Record<TabId, LucideIcon> = {
-  overview:  LayoutDashboard,
-  catalog:   Archive,
-  inventory: Warehouse,
-  sales:     Receipt,
-  purchases: PackagePlus,
+const ICONS: Record<TabId, React.ElementType> = {
+  overview: LayoutDashboard,
+  catalog: Package,
+  parties: Users,
   customers: Users,
-  ledger:    BookText,
-  reports:   BarChart3,
-  users:     UsersRound,
+  "cash-accounts": Wallet,
+  tables: Table2,
+  sales: ShoppingCart,
+  purchases: Truck,
+  expenses: TrendingDown,
+  revenues: TrendingUp,
+  vouchers: Receipt,
+  inventory: Boxes,
+  "stock-take": ClipboardCheck,
+  accounting: BookOpen,
+  ledger: ScrollText,
+  reports: BarChart3,
+  statements: FileText,
+  users: UserCog,
+  settings: Settings,
+  audit: History,
+  account: CircleUser,
 }
 
-function NavList({ tabs, active, onSelect, collapsed }: {
-  tabs: TabId[]; active: TabId; onSelect: (id: TabId) => void; collapsed: boolean
+export function ClientSidebar({ active, onNavigate, badges }: {
+  active: TabId
+  onNavigate: (tab: TabId) => void
+  /** أرقام تنبيه بجانب التبويبات، مثل عدد الأصناف تحت الحد الأدنى */
+  badges?: Partial<Record<TabId, number>>
 }) {
-  return (
-    <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
-      {tabs.map((tabId) => {
-        const Icon = TAB_ICONS[tabId]
-        const isActive = active === tabId
-        return (
-          <button
-            key={tabId} type="button"
-            onClick={() => onSelect(tabId)}
-            title={collapsed ? TAB_LABELS[tabId] : undefined}
-            className={cn(
-              "group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition",
-              isActive
-                ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
-              collapsed && "justify-center px-0"
-            )}
-          >
-            {isActive && (
-              <motion.span
-                layoutId="nav-active"
-                className="absolute right-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-full bg-sidebar-primary"
-                transition={{ type: "spring", stiffness: 500, damping: 34 }}
-              />
-            )}
-            <Icon className="size-5 shrink-0" />
-            {!collapsed && <span className="truncate">{TAB_LABELS[tabId]}</span>}
-          </button>
-        )
-      })}
-    </nav>
-  )
-}
+  const { user, company, canSee } = useSession()
+  const [collapsed, setCollapsed] = useState(false)
 
-function Brand({ collapsed }: { collapsed: boolean }) {
+  const groups = NAV_GROUPS
+    .map((g) => ({ ...g, tabs: g.tabs.filter(canSee) }))
+    .filter((g) => g.tabs.length > 0)
+
   return (
-    <div className={cn("flex items-center gap-2.5 px-5 py-5", collapsed && "justify-center px-0")}>
-      <div className="size-9 shrink-0 rounded-xl bg-sidebar-primary flex items-center justify-center">
-        <Calculator className="size-5 text-sidebar-primary-foreground" />
-      </div>
-      {!collapsed && (
-        <div className="min-w-0">
-          <p className="text-sm font-bold text-sidebar-foreground">مُحاسِب</p>
-          <p className="text-xs text-sidebar-foreground/50">محاسبة ونقاط البيع</p>
-        </div>
+    <aside
+      className={cn(
+        "sidebar no-print flex flex-col shrink-0 bg-sidebar text-sidebar-foreground",
+        "border-l border-sidebar-border transition-[width] duration-200",
+        collapsed ? "w-16" : "w-60"
       )}
-    </div>
-  )
-}
-
-export function ClientSidebar({ allowedTabs, active, onSelect, collapsed, onToggleCollapse, mobileOpen, onCloseMobile }: {
-  allowedTabs: TabId[]; active: TabId; onSelect: (id: TabId) => void
-  collapsed: boolean; onToggleCollapse: () => void; mobileOpen: boolean; onCloseMobile: () => void
-}) {
-  return (
-    <>
-      <aside className={cn(
-        "sticky top-0 hidden h-svh shrink-0 flex-col border-l border-sidebar-border bg-sidebar transition-[width] duration-300 lg:flex",
-        collapsed ? "w-[76px]" : "w-64"
+    >
+      {/* ── الهوية ── */}
+      <div className={cn(
+        "flex items-center gap-2.5 px-3 py-4 border-b border-sidebar-border",
+        collapsed && "justify-center px-0"
       )}>
-        <Brand collapsed={collapsed} />
-        <NavList tabs={allowedTabs} active={active} onSelect={onSelect} collapsed={collapsed} />
-        <div className="border-t border-sidebar-border p-3">
-          <button
-            type="button" onClick={onToggleCollapse}
-            className={cn(
-              "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-sidebar-foreground/70 transition hover:bg-sidebar-accent/50",
-              collapsed && "justify-center px-0"
-            )}
-          >
-            <ChevronRight className={cn("size-5 transition-transform", collapsed && "rotate-180")} />
-            {!collapsed && <span>طي القائمة</span>}
-          </button>
+        <div className="size-8 shrink-0 rounded-lg bg-sidebar-primary text-sidebar-primary-foreground
+                        flex items-center justify-center font-bold text-sm">
+          م
         </div>
-      </aside>
-
-      <AnimatePresence>
-        {mobileOpen && (
-          <div className="fixed inset-0 z-50 lg:hidden">
-            <motion.div
-              className="absolute inset-0 bg-foreground/40 backdrop-blur-sm"
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              onClick={onCloseMobile}
-            />
-            <motion.aside
-              initial={{ x: 300 }} animate={{ x: 0 }} exit={{ x: 300 }}
-              transition={{ type: "spring", stiffness: 380, damping: 38 }}
-              className="absolute right-0 flex h-full w-64 flex-col border-l border-sidebar-border bg-sidebar"
-            >
-              <div className="flex items-center justify-between pl-3">
-                <Brand collapsed={false} />
-                <button
-                  type="button" onClick={onCloseMobile}
-                  className="size-8 rounded-lg text-sidebar-foreground/70 hover:bg-sidebar-accent/50 flex items-center justify-center"
-                >
-                  <PanelRight className="size-4" />
-                </button>
-              </div>
-              <NavList
-                tabs={allowedTabs} active={active}
-                onSelect={(id) => { onSelect(id); onCloseMobile() }}
-                collapsed={false}
-              />
-            </motion.aside>
+        {!collapsed && (
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-sidebar-accent-foreground truncate">مُحاسِب</p>
+            <p className="text-[11px] text-sidebar-muted truncate">{company?.name ?? "…"}</p>
           </div>
         )}
-      </AnimatePresence>
-    </>
+      </div>
+
+      {/* ── القائمة ── */}
+      <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-4">
+        {groups.map((group) => (
+          <div key={group.id}>
+            {group.label && !collapsed && (
+              <p className="px-2.5 pb-1.5 text-[11px] font-medium text-sidebar-muted">
+                {group.label}
+              </p>
+            )}
+            <div className="space-y-0.5">
+              {group.tabs.map((tab) => {
+                const Icon = ICONS[tab]
+                const isActive = active === tab
+                const badge = badges?.[tab]
+
+                return (
+                  <button
+                    key={tab}
+                    onClick={() => onNavigate(tab)}
+                    title={collapsed ? TAB_LABELS[tab] : undefined}
+                    className={cn(
+                      "group relative w-full flex items-center gap-2.5 rounded-lg px-2.5 py-2",
+                      "text-[13px] font-medium transition text-right",
+                      collapsed && "justify-center px-0",
+                      isActive
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        : "text-sidebar-foreground/75 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+                    )}
+                  >
+                    {isActive && (
+                      <span className="absolute right-0 inset-y-1.5 w-0.5 rounded-l bg-sidebar-primary" />
+                    )}
+                    <Icon className="size-[18px] shrink-0" />
+                    {!collapsed && <span className="flex-1 truncate">{TAB_LABELS[tab]}</span>}
+                    {!collapsed && badge !== undefined && badge > 0 && (
+                      <span className="num shrink-0 rounded-full bg-warning/25 text-warning
+                                       px-1.5 py-0.5 text-[10px] font-semibold">
+                        {badge}
+                      </span>
+                    )}
+                    {collapsed && badge !== undefined && badge > 0 && (
+                      <span className="absolute top-1 left-1 size-1.5 rounded-full bg-warning" />
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </nav>
+
+      {/* ── المستخدم الحالي (عرض فقط — لا تبديل) ── */}
+      <div className="border-t border-sidebar-border p-2">
+        {!collapsed && (
+          <div className="flex items-center gap-2.5 px-1.5 py-2 mb-1">
+            <div className="size-7 shrink-0 rounded-full bg-sidebar-accent
+                            flex items-center justify-center text-[11px] font-semibold
+                            text-sidebar-accent-foreground">
+              {user.name.slice(0, 2)}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-sidebar-accent-foreground truncate">{user.name}</p>
+              <p className="text-[10px] text-sidebar-muted truncate">{roleLabel(user.role)}</p>
+            </div>
+          </div>
+        )}
+
+        <button
+          onClick={() => setCollapsed((c) => !c)}
+          className={cn(
+            "w-full flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px]",
+            "text-sidebar-foreground/60 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground transition",
+            collapsed && "justify-center px-0"
+          )}
+        >
+          {collapsed
+            ? <PanelRightOpen className="size-[18px]" />
+            : <><PanelRightClose className="size-[18px]" /><span>طيّ القائمة</span></>}
+        </button>
+      </div>
+    </aside>
   )
+}
+
+function roleLabel(role: string | null): string {
+  return {
+    admin: "مدير النظام",
+    accountant: "محاسب",
+    inventory: "أمين المخزن",
+    cashier: "كاشير",
+  }[role ?? ""] ?? "مستخدم"
 }
