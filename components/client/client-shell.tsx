@@ -130,21 +130,16 @@ function TabContent({ tab, onNavigate }: {
     case "vouchers":       return <VouchersTab />
     case "expenses":       return <ExpensesTab kind="expense" />
     case "revenues":       return <ExpensesTab kind="revenue" />
-    case "parties":
-    case "customers":      return <PartiesTab />
+    case "customers":      return <PartiesTab kind="customer" />
+    case "suppliers":      return <PartiesTab kind="supplier" />
     case "catalog":        return <CatalogTab />
-    case "inventory":
-    case "stock-take":     return <InventoryTab />
-    case "accounting":
-    case "ledger":         return <AccountingTab />
+    case "inventory":      return <InventoryTab />
+    case "accounting":     return <AccountingTab />
     case "cash-accounts":  return <CashAccountsTab />
-    case "reports":
-    case "statements":     return <ReportsTab />
+    case "reports":        return <ReportsTab />
     case "users":          return <UsersTab />
+    case "settings":       return <SettingsTab />
     case "account":        return <AccountTab />
-    case "settings":
-    case "tables":
-    case "audit":          return <SettingsTab />
     default:               return <EmptyState message="شاشة غير معروفة" />
   }
 }

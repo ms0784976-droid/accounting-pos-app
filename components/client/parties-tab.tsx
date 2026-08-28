@@ -28,12 +28,17 @@ import {
 
 type View = "all" | "customer" | "supplier"
 
-export function PartiesTab() {
+/**
+ * شاشة واحدة تخدم الزبائن والموردين كشاشتين منفصلتين في القائمة.
+ * تمرير kind يقفل النوع ويخفي شريط التبويب — الشاشة تصير مخصّصة.
+ */
+export function PartiesTab({ kind = "all" }: { kind?: View } = {}) {
   const { currency, company, can } = useSession()
   const { notify } = useToast()
   const tz = company?.timezone ?? "Asia/Hebron"
 
-  const [view, setView] = useState<View>("all")
+  const [view, setView] = useState<View>(kind)
+  const locked = kind !== "all"
   const [search, setSearch] = useState("")
   const [editing, setEditing] = useState<PartyWithBalance | null>(null)
   const [creating, setCreating] = useState<PartyKind | null>(null)
@@ -82,36 +87,62 @@ export function PartiesTab() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="الزبائن والموردون"
-        subtitle="الأرصدة محسوبة من القيود المحاسبية مباشرة"
+        title={
+          kind === "customer" ? "الزبائن"
+          : kind === "supplier" ? "الموردون"
+          : "الزبائن والموردون"
+        }
+        subtitle={
+          kind === "customer" ? "أرصدة الزبائن وكشوف حساباتهم — المستحق لنا"
+          : kind === "supplier" ? "أرصدة الموردين وكشوف حساباتهم — المستحق علينا"
+          : "الأرصدة محسوبة من القيود المحاسبية مباشرة"
+        }
         actions={
           <>
             <Btn variant="outline" size="sm" icon={Download} onClick={handleExport}>تصدير</Btn>
-            <Btn icon={Plus} onClick={() => setCreating("customer")}>جهة تعامل جديدة</Btn>
+            <Btn icon={Plus}
+                 onClick={() => setCreating(kind === "supplier" ? "supplier" : "customer")}>
+              {kind === "supplier" ? "مورد جديد" : kind === "customer" ? "زبون جديد" : "جهة تعامل جديدة"}
+            </Btn>
           </>
         }
       />
 
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
-        <StatCard label="مستحق لنا" value={fmt(totals.receivable, currency)}
-                  hint="ذمم مدينة" icon={ArrowDownLeft} tone="success" />
-        <StatCard label="مستحق علينا" value={fmt(totals.payable, currency)}
-                  hint="ذمم دائنة" icon={ArrowUpRight} tone="danger" />
-        <StatCard label="عدد الزبائن" value={String(totals.customers)} icon={Users} />
-        <StatCard label="عدد الموردين" value={String(totals.suppliers)} icon={Users} />
+        {kind !== "supplier" && (
+          <StatCard label="مستحق لنا" value={fmt(totals.receivable, currency)}
+                    hint="ذمم مدينة على الزبائن" icon={ArrowDownLeft} tone="success" />
+        )}
+        {kind !== "customer" && (
+          <StatCard label="مستحق علينا" value={fmt(totals.payable, currency)}
+                    hint="ذمم دائنة للموردين" icon={ArrowUpRight} tone="danger" />
+        )}
+        {kind !== "supplier" && (
+          <StatCard label="عدد الزبائن" value={String(totals.customers)} icon={Users} />
+        )}
+        {kind !== "customer" && (
+          <StatCard label="عدد الموردين" value={String(totals.suppliers)} icon={Users} />
+        )}
       </div>
 
       <SectionCard>
         <div className="px-5 pt-4 pb-3 flex flex-wrap items-center justify-between gap-3">
-          <TabBar<View>
-            tabs={[
-              { id: "all", label: "الكل", count: parties.data?.length },
-              { id: "customer", label: "الزبائن", count: totals.customers },
-              { id: "supplier", label: "الموردون", count: totals.suppliers },
-            ]}
-            active={view}
-            onChange={setView}
-          />
+          {locked ? (
+            <p className="text-sm font-medium text-foreground">
+              {kind === "supplier" ? "قائمة الموردين" : "قائمة الزبائن"}
+              <span className="mr-2 text-xs text-muted-foreground num">({rows.length})</span>
+            </p>
+          ) : (
+            <TabBar<View>
+              tabs={[
+                { id: "all", label: "الكل", count: parties.data?.length },
+                { id: "customer", label: "الزبائن", count: totals.customers },
+                { id: "supplier", label: "الموردون", count: totals.suppliers },
+              ]}
+              active={view}
+              onChange={setView}
+            />
+          )}
           <div className="w-full sm:w-64">
             <SearchBox value={search} onChange={setSearch} placeholder="بحث بالاسم أو الهاتف أو الكود…" />
           </div>
@@ -123,8 +154,15 @@ export function PartiesTab() {
           <TableSkeleton rows={6} cols={6} />
         ) : !rows.length ? (
           <EmptyState
-            message={search ? "لا نتائج للبحث" : "لا توجد جهات تعامل"}
-            hint={search ? undefined : "أضف زبائنك ومورديك لتتبّع أرصدتهم وكشوف حساباتهم"}
+            message={
+              search ? "لا نتائج للبحث"
+              : kind === "supplier" ? "لا يوجد موردون"
+              : kind === "customer" ? "لا يوجد زبائن"
+              : "لا توجد جهات تعامل"
+            }
+            hint={search ? undefined
+              : kind === "supplier" ? "أضف مورديك لتتبّع أرصدتهم وما هو مستحق عليك"
+              : "أضف زبائنك لتتبّع أرصدتهم وكشوف حساباتهم"}
             action={!search && <Btn size="sm" icon={Plus} onClick={() => setCreating("customer")}>إضافة</Btn>}
           />
         ) : (
@@ -191,7 +229,7 @@ export function PartiesTab() {
       <PartyForm
         open={creating !== null || editing !== null}
         party={editing}
-        defaultKind={creating ?? "customer"}
+        defaultKind={creating ?? (kind === "supplier" ? "supplier" : "customer")}
         onClose={() => { setCreating(null); setEditing(null) }}
         onSaved={() => { parties.reload(); notify("تم الحفظ") }}
       />

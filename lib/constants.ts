@@ -11,70 +11,56 @@ import type {
 export type TabId =
   // لوحة القيادة
   | "overview"
-  // الجداول الأساسية
-  | "catalog" | "parties" | "cash-accounts" | "tables"
-  // العمليات
-  | "sales" | "purchases" | "expenses" | "revenues" | "vouchers"
-  // المخزون
-  | "inventory" | "stock-take"
+  // العمليات اليومية
+  | "sales" | "purchases" | "vouchers" | "expenses" | "revenues"
+  // البيانات
+  | "customers" | "suppliers" | "catalog" | "inventory"
   // المحاسبة
-  | "accounting" | "ledger"
+  | "accounting" | "cash-accounts"
   // التقارير
-  | "reports" | "statements"
+  | "reports"
   // الإدارة
-  | "users" | "settings" | "audit" | "account"
-  // متوافق مع القديم
-  | "customers"
+  | "users" | "settings" | "account"
 
 export type OwnerTabId = "tenants" | "add-tenant"
 
 export const TAB_LABELS: Record<TabId, string> = {
   overview:        "الرئيسية",
-  catalog:         "الأصناف",
-  parties:         "الزبائن والموردون",
-  customers:       "الزبائن والموردون",
-  "cash-accounts": "الصناديق والبنوك",
-  tables:          "الجداول الأساسية",
   sales:           "المبيعات",
   purchases:       "المشتريات",
+  vouchers:        "سندات القبض والصرف",
   expenses:        "المصروفات",
   revenues:        "الإيرادات",
-  vouchers:        "سندات القبض والصرف",
-  inventory:       "المخزون",
-  "stock-take":    "الجرد",
-  accounting:      "المحاسبة",
-  ledger:          "دفتر الأستاذ",
+  customers:       "الزبائن",
+  suppliers:       "الموردون",
+  catalog:         "الأصناف",
+  inventory:       "المخزون والجرد",
+  accounting:      "المحاسبة والقيود",
+  "cash-accounts": "الصناديق والبنوك",
   reports:         "التقارير",
-  statements:      "كشوف الحسابات",
   users:           "المستخدمون",
   settings:        "إعدادات الشركة",
   account:         "حسابي",
-  audit:           "سجل التدقيق",
 }
 
 /** أيقونة كل تبويب — من lucide-react */
 export const TAB_ICONS: Record<TabId, string> = {
   overview:        "LayoutDashboard",
-  catalog:         "Package",
-  parties:         "Users",
-  customers:       "Users",
-  "cash-accounts": "Wallet",
-  tables:          "Table2",
   sales:           "ShoppingCart",
   purchases:       "Truck",
+  vouchers:        "Receipt",
   expenses:        "TrendingDown",
   revenues:        "TrendingUp",
-  vouchers:        "Receipt",
+  customers:       "Users",
+  suppliers:       "Factory",
+  catalog:         "Package",
   inventory:       "Boxes",
-  "stock-take":    "ClipboardCheck",
   accounting:      "BookOpen",
-  ledger:          "ScrollText",
+  "cash-accounts": "Wallet",
   reports:         "BarChart3",
-  statements:      "FileText",
   users:           "UserCog",
   settings:        "Settings",
   account:         "CircleUser",
-  audit:           "History",
 }
 
 /** تجميع القائمة الجانبية بمجموعات — أوضح من قائمة طويلة مسطّحة */
@@ -87,11 +73,9 @@ export interface NavGroup {
 export const NAV_GROUPS: NavGroup[] = [
   { id: "main",       label: "",                tabs: ["overview"] },
   { id: "operations", label: "العمليات اليومية", tabs: ["sales", "purchases", "vouchers", "expenses", "revenues"] },
-  { id: "data",       label: "البيانات",         tabs: ["parties", "catalog", "inventory", "stock-take"] },
-  { id: "accounting", label: "المحاسبة",         tabs: ["accounting", "ledger", "cash-accounts"] },
-  { id: "insights",   label: "التقارير",         tabs: ["reports", "statements"] },
-  { id: "admin",      label: "الإدارة",          tabs: ["users", "audit", "settings"] },
-  { id: "me",         label: "",                tabs: ["account"] },
+  { id: "data",       label: "البيانات",         tabs: ["customers", "suppliers", "catalog", "inventory"] },
+  { id: "accounting", label: "المحاسبة",         tabs: ["accounting", "cash-accounts", "reports"] },
+  { id: "admin",      label: "الإدارة",          tabs: ["users", "settings", "account"] },
 ]
 
 /* ================================================================ */
@@ -113,22 +97,21 @@ export const ROLE_META: Record<ClientRole, { label: string; tint: string; hint: 
 export const ROLE_TABS: Record<ClientRole, TabId[]> = {
   admin: [
     "overview", "sales", "purchases", "vouchers", "expenses", "revenues",
-    "parties", "catalog", "inventory", "stock-take",
-    "accounting", "ledger", "cash-accounts",
-    "reports", "statements",
-    "users", "tables", "audit", "settings", "account",
+    "customers", "suppliers", "catalog", "inventory",
+    "accounting", "cash-accounts", "reports",
+    "users", "settings", "account",
   ],
   accountant: [
     "overview", "sales", "purchases", "vouchers", "expenses", "revenues",
-    "parties", "catalog", "inventory", "stock-take",
-    "accounting", "ledger", "cash-accounts",
-    "reports", "statements", "settings", "account",
+    "customers", "suppliers", "catalog", "inventory",
+    "accounting", "cash-accounts", "reports",
+    "settings", "account",
   ],
   inventory: [
-    "overview", "purchases", "catalog", "inventory", "stock-take", "parties", "account",
+    "overview", "purchases", "suppliers", "catalog", "inventory", "account",
   ],
   cashier: [
-    "sales", "catalog", "parties", "account",
+    "sales", "customers", "catalog", "account",
   ],
 }
 

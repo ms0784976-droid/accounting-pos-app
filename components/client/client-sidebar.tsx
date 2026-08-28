@@ -9,34 +9,28 @@ import { cn } from "@/lib/utils"
 import { NAV_GROUPS, TAB_LABELS, type TabId } from "@/lib/constants"
 import { useSession } from "@/lib/session"
 import {
-  CircleUser,
-  LayoutDashboard, Package, Users, Wallet, Table2, ShoppingCart, Truck,
-  TrendingDown, TrendingUp, Receipt, Boxes, ClipboardCheck, BookOpen,
-  ScrollText, BarChart3, FileText, UserCog, Settings, History,
+  LayoutDashboard, ShoppingCart, Truck, Receipt, TrendingDown, TrendingUp,
+  Users, Factory, Package, Boxes, BookOpen, Wallet, BarChart3,
+  UserCog, Settings, CircleUser,
   PanelRightClose, PanelRightOpen,
 } from "lucide-react"
 
 const ICONS: Record<TabId, React.ElementType> = {
   overview: LayoutDashboard,
-  catalog: Package,
-  parties: Users,
-  customers: Users,
-  "cash-accounts": Wallet,
-  tables: Table2,
   sales: ShoppingCart,
   purchases: Truck,
+  vouchers: Receipt,
   expenses: TrendingDown,
   revenues: TrendingUp,
-  vouchers: Receipt,
+  customers: Users,
+  suppliers: Factory,
+  catalog: Package,
   inventory: Boxes,
-  "stock-take": ClipboardCheck,
   accounting: BookOpen,
-  ledger: ScrollText,
+  "cash-accounts": Wallet,
   reports: BarChart3,
-  statements: FileText,
   users: UserCog,
   settings: Settings,
-  audit: History,
   account: CircleUser,
 }
 

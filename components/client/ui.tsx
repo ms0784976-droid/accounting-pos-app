@@ -169,14 +169,16 @@ export function DataTable({ children, className }: { children: ReactNode; classN
   )
 }
 
-export function Th({ children, align = "right", width, className }: {
+export function Th({ children, align = "right", width, className, colSpan }: {
   children?: ReactNode
   align?: "right" | "left" | "center"
   width?: string
   className?: string
+  colSpan?: number
 }) {
   return (
     <th
+      colSpan={colSpan}
       style={width ? { width } : undefined}
       className={cn(
         "px-4 py-2.5 text-xs font-medium text-muted-foreground whitespace-nowrap",
@@ -190,14 +192,21 @@ export function Th({ children, align = "right", width, className }: {
   )
 }
 
-export function Td({ children, align = "right", mono, className }: {
+export function Td({ children, align = "right", mono, className, colSpan, rowSpan, onClick }: {
   children?: ReactNode
   align?: "right" | "left" | "center"
   mono?: boolean
   className?: string
+  /** يجب تمريرها للـ <td> فعلياً — تجاهلها يسبّب React error #441 */
+  colSpan?: number
+  rowSpan?: number
+  onClick?: (e: React.MouseEvent<HTMLTableCellElement>) => void
 }) {
   return (
     <td
+      colSpan={colSpan}
+      rowSpan={rowSpan}
+      onClick={onClick}
       className={cn(
         "px-4 py-2.5 text-foreground",
         align === "left" && "text-left",

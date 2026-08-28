@@ -13,21 +13,23 @@ import {
   fetchProfitAndLossAction, fetchBalanceSheetAction, fetchTrialBalanceAction,
   fetchTopProductsAction, fetchVatReportAction, fetchSalesTrendAction,
 } from "@/app/actions/reports"
+import { fetchPartiesAction, fetchPartyStatementAction } from "@/app/actions/parties"
 import {
   PageHeader, SectionCard, DataTable, Th, Td, Tr, TotalRow, Money,
   EmptyState, TableSkeleton, InlineError, InfoNote, DateRangePicker,
-  SelectInput, TabBar, Btn, StatCard, formatDate, formatQty,
-  exportToCsv, printArea,
+  SelectInput, TabBar, Btn, StatCard, Badge, BalanceBadge, SearchBox,
+  formatDate, formatQty, exportToCsv, printArea,
 } from "./ui"
-import { DATE_PRESETS, ACCOUNT_TYPE_META } from "@/lib/constants"
+import { DATE_PRESETS, ACCOUNT_TYPE_META, PARTY_KIND_META } from "@/lib/constants"
 import type { FinancialLine } from "@/lib/types"
 import {
-  Download, Printer, TrendingUp, Landmark, Receipt,
+  Download, Printer, TrendingUp, Landmark, Receipt, FileText, User,
 } from "lucide-react"
 
-type ReportId = "pnl" | "balance" | "trial" | "products" | "vat" | "trend"
+type ReportId = "statement" | "pnl" | "balance" | "trial" | "products" | "vat" | "trend"
 
 const REPORTS: { id: ReportId; label: string }[] = [
+  { id: "statement", label: "كشف حساب زبون / مورد" },
   { id: "pnl",      label: "الأرباح والخسائر" },
   { id: "balance",  label: "الميزانية العمومية" },
   { id: "trial",    label: "ميزان المراجعة" },
@@ -82,6 +84,7 @@ export function ReportsTab() {
             </p>
           </div>
 
+          {report === "statement" && <PartyStatementReport range={range} />}
           {report === "pnl"      && <ProfitLoss range={range} />}
           {report === "balance"  && <BalanceSheetReport asOf={range.to} />}
           {report === "trial"    && <TrialBalance range={range} />}
@@ -629,6 +632,211 @@ function VatReport({ range }: { range: Range }) {
         هذا التقرير مبني على القيود المرحّلة إلى حسابي ضريبة المدخلات والمخرجات.
         راجعه مع محاسبك القانوني قبل التقديم — البرنامج أداة مساعدة لا بديل عن المراجعة المهنية.
       </InfoNote>
+    </div>
+  )
+}
+
+/* ================================================================ */
+/* كشف حساب زبون أو مورد                                             */
+/* ================================================================ */
+// تقرير مستقل قابل للطباعة والتصدير، بترويسة تحمل بيانات الشركة
+// وجهة التعامل — حتى يصلح كمستند يُرسل للزبون لا مجرد شاشة داخلية.
+
+function PartyStatementReport({ range }: { range: Range }) {
+  const { currency, company } = useSession()
+  const [partyId, setPartyId] = useState("")
+  const [search, setSearch] = useState("")
+
+  const parties = useAsyncData(() => fetchPartiesAction("all"), [])
+
+  const statement = useAsyncData(
+    () => (partyId
+      ? fetchPartyStatementAction(partyId, range.from, range.to)
+      : Promise.resolve([])),
+    [partyId, range.from, range.to]
+  )
+
+  const party = parties.data?.find((p) => p.id === partyId) ?? null
+
+  const filtered = (parties.data ?? []).filter((p) => {
+    if (!search.trim()) return true
+    const q = search.trim().toLowerCase()
+    return p.name.toLowerCase().includes(q) ||
+           p.code.toLowerCase().includes(q) ||
+           p.phone.includes(q)
+  })
+
+  const rows = statement.data ?? []
+  const totals = rows.reduce(
+    (acc, r) => ({ debit: acc.debit + r.debit, credit: acc.credit + r.credit }),
+    { debit: 0, credit: 0 }
+  )
+  const closing = rows.length ? rows[rows.length - 1].runningBalance : 0
+  const opening = rows.length ? rows[0].runningBalance : 0
+
+  const handleExport = () => {
+    if (!party || !rows.length) return
+    exportToCsv(
+      `كشف-حساب-${party.name}-${range.from}_${range.to}.csv`,
+      ["التاريخ", "المستند", "البيان", "مدين", "دائن", "الرصيد"],
+      rows.map((r) => [
+        r.date ?? "", r.docNo, r.description,
+        r.debit.toFixed(2), r.credit.toFixed(2), r.runningBalance.toFixed(2),
+      ])
+    )
+  }
+
+  return (
+    <div>
+      {/* ── اختيار الجهة — لا يُطبع ── */}
+      <div className="no-print px-5 py-4 border-b border-border grid gap-3 sm:grid-cols-[1fr_1.3fr]">
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground mb-1.5">
+            بحث سريع
+          </label>
+          <SearchBox value={search} onChange={setSearch} placeholder="الاسم أو الكود أو الهاتف…" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground mb-1.5">
+            اختر الزبون أو المورد
+          </label>
+          <SelectInput value={partyId} onChange={(e) => setPartyId(e.target.value)}>
+            <option value="">— اختر —</option>
+            {filtered.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} · {PARTY_KIND_META[p.kind].label}
+                {Math.abs(p.balance) > 0.009 ? ` (${p.balance.toFixed(2)})` : ""}
+              </option>
+            ))}
+          </SelectInput>
+        </div>
+      </div>
+
+      {!partyId ? (
+        <EmptyState
+          icon={User}
+          message="اختر زبوناً أو مورداً"
+          hint="سيظهر كشف حساب تفصيلي بكل الحركات والأرصدة المتراكمة، جاهز للطباعة أو الإرسال"
+        />
+      ) : statement.loading ? (
+        <TableSkeleton rows={7} cols={6} />
+      ) : statement.error ? (
+        <div className="p-5"><InlineError message={statement.error} /></div>
+      ) : (
+        <>
+          {/* ── ترويسة تُطبع ── */}
+          <div className="px-5 py-4 border-b border-border">
+            <div className="hidden print:block mb-4 pb-3 border-b-2 border-neutral-800">
+              <h2 className="text-lg font-bold">كشف حساب</h2>
+              <p className="text-xs mt-1">
+                {company?.name}
+                {company?.phone && <span className="num"> · {company.phone}</span>}
+              </p>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div>
+                <p className="text-[11px] text-muted-foreground mb-0.5">جهة التعامل</p>
+                <p className="text-sm font-semibold text-foreground">{party?.name}</p>
+                <p className="text-[11px] text-muted-foreground num">
+                  {party?.code}
+                  {party?.phone && ` · ${party.phone}`}
+                </p>
+              </div>
+              <div>
+                <p className="text-[11px] text-muted-foreground mb-0.5">الفترة</p>
+                <p className="text-sm num">
+                  {formatDate(range.from)} — {formatDate(range.to)}
+                </p>
+                {party && (
+                  <Badge label={PARTY_KIND_META[party.kind].label}
+                         tint={PARTY_KIND_META[party.kind].tint} />
+                )}
+              </div>
+              <div className="sm:text-left">
+                <p className="text-[11px] text-muted-foreground mb-0.5">الرصيد الختامي</p>
+                <BalanceBadge balance={closing} currency={currency} />
+              </div>
+            </div>
+          </div>
+
+          {!rows.length ? (
+            <EmptyState message="لا حركات على هذا الحساب في الفترة المحددة" />
+          ) : (
+            <>
+              <div className="grid gap-3 grid-cols-2 lg:grid-cols-4 p-5">
+                <StatCard label="الرصيد السابق" value={fmt(opening, currency)} icon={FileText} />
+                <StatCard label="مجموع المدين" value={fmt(totals.debit, currency)} />
+                <StatCard label="مجموع الدائن" value={fmt(totals.credit, currency)} />
+                <StatCard
+                  label={closing > 0 ? "المستحق عليه" : closing < 0 ? "المستحق له" : "الرصيد"}
+                  value={fmt(Math.abs(closing), currency)}
+                  tone={closing > 0 ? "danger" : closing < 0 ? "success" : "neutral"}
+                />
+              </div>
+
+              <DataTable>
+                <thead className="sticky-head">
+                  <tr>
+                    <Th width="95px">التاريخ</Th>
+                    <Th width="110px">المستند</Th>
+                    <Th>البيان</Th>
+                    <Th align="left" width="115px">مدين</Th>
+                    <Th align="left" width="115px">دائن</Th>
+                    <Th align="left" width="130px">الرصيد</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <Tr key={i} className={r.docType === "opening" ? "bg-muted/40" : ""}>
+                      <Td mono className="text-xs">{r.date ? formatDate(r.date) : "—"}</Td>
+                      <Td mono className="text-xs text-muted-foreground">{r.docNo}</Td>
+                      <Td className="text-xs">{r.description}</Td>
+                      <Td align="left">
+                        {r.debit ? <Money value={r.debit} currency={currency} /> : "—"}
+                      </Td>
+                      <Td align="left">
+                        {r.credit ? <Money value={r.credit} currency={currency} /> : "—"}
+                      </Td>
+                      <Td align="left">
+                        <Money value={r.runningBalance} currency={currency} colored bold />
+                      </Td>
+                    </Tr>
+                  ))}
+                  <TotalRow>
+                    <Td colSpan={3}>الإجمالي</Td>
+                    <Td align="left"><Money value={totals.debit} currency={currency} bold /></Td>
+                    <Td align="left"><Money value={totals.credit} currency={currency} bold /></Td>
+                    <Td align="left"><Money value={closing} currency={currency} colored bold /></Td>
+                  </TotalRow>
+                </tbody>
+              </DataTable>
+
+              <div className="hidden print:block px-5 py-6 mt-4 border-t border-neutral-300">
+                <div className="grid grid-cols-2 gap-8">
+                  <div>
+                    <p className="text-[11px] text-neutral-500 mb-6">توقيع المستلم</p>
+                    <div className="border-b border-neutral-400" />
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-neutral-500 mb-6">توقيع وختم الشركة</p>
+                    <div className="border-b border-neutral-400" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-5 no-print flex gap-2">
+                <Btn variant="outline" size="sm" icon={Download} onClick={handleExport}>
+                  تصدير Excel
+                </Btn>
+                <Btn variant="outline" size="sm" icon={Printer} onClick={printArea}>
+                  طباعة الكشف
+                </Btn>
+              </div>
+            </>
+          )}
+        </>
+      )}
     </div>
   )
 }

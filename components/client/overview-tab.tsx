@@ -99,14 +99,14 @@ export function OverviewTab({ onNavigate }: { onNavigate: (tab: TabId) => void }
           hint={d && d.overdueCount > 0 ? `${d.overdueCount} فاتورة متأخرة` : "لا فواتير متأخرة"}
           hintTone={d && d.overdueCount > 0 ? "danger" : undefined}
           icon={ArrowDownLeft}
-          onClick={() => onNavigate("parties")}
+          onClick={() => onNavigate("customers")}
         />
         <StatCard
           label="ذمم الموردين (علينا)"
           value={d ? money(d.payables, currency) : "…"}
           tone={d && d.payables > 0 ? "danger" : "neutral"}
           icon={ArrowUpRight}
-          onClick={() => onNavigate("parties")}
+          onClick={() => onNavigate("suppliers")}
         />
         <StatCard
           label="قيمة المخزون"
