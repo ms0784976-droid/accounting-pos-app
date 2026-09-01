@@ -230,7 +230,14 @@ export interface InvoiceLineDraft {
   unit: UnitCode
   quantity: number
   unitPrice: number
+  /** خصم بالنسبة المئوية — يُستخدم إذا كان أكبر من صفر */
   discountPercent?: number
+  /**
+   * خصم بمبلغ ثابت بعملة الفاتورة.
+   * يُطبَّق كما هو فقط عندما تكون discountPercent صفراً — هذا ما تفعله
+   * دالة fn_invoice_line_calc في قاعدة البيانات، فلا تقريب ولا فروقات قروش.
+   */
+  discountAmount?: number
   taxPercent?: number
 }
 

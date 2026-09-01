@@ -22,7 +22,7 @@ import {
   useToast, formatQty,
 } from "./ui"
 import { UNITS } from "@/lib/units"
-import { INVOICE_TYPE_META } from "@/lib/constants"
+import { INVOICE_TYPE_META, CURRENCY_MAP } from "@/lib/constants"
 import type {
   InvoiceType, PaymentMethod, UnitCode, Product, InvoiceWithLines,
 } from "@/lib/types"
@@ -37,9 +37,20 @@ interface Line {
   unit: UnitCode
   quantity: string
   unitPrice: string
-  discountPercent: string
+  /** "percent" = خصم بالنسبة · "amount" = خصم بمبلغ ثابت بالعملة */
+  discountMode: "percent" | "amount"
+  discountValue: string
   taxPercent: string
   stockQty: number
+}
+
+/** خصم السطر بالعملة — مصدر واحد للحقيقة يستخدمه العرض والحفظ */
+function lineDiscount(l: Line): number {
+  const gross = (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0)
+  const value = Number(l.discountValue) || 0
+  if (value <= 0) return 0
+  const raw = l.discountMode === "amount" ? value : gross * (value / 100)
+  return Math.min(Math.round(raw * 100) / 100, Math.round(gross * 100) / 100)
 }
 
 export function InvoiceEditor({ type, onSaved, onCancel }: {
@@ -51,6 +62,7 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
   const { notify } = useToast()
   const tz = company?.timezone ?? "Asia/Hebron"
   const meta = INVOICE_TYPE_META[type]
+  const currencySymbol = CURRENCY_MAP.get(currency)?.symbol ?? currency
   const isSale = type === "sale" || type === "sale_return"
   const defaultTax = company?.vatEnabled ? company.vatRate : 0
 
@@ -100,7 +112,8 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
         unitPrice: String(
           product ? (isSale ? product.lastPrice : product.lastCost) || "" : ""
         ),
-        discountPercent: "",
+        discountMode: "amount",
+        discountValue: "",
         taxPercent: String(product?.taxPercent ?? defaultTax ?? 0),
         stockQty: product?.stockQty ?? 0,
       },
@@ -120,7 +133,7 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
     let subtotal = 0, discount = 0, tax = 0
     for (const l of lines) {
       const gross = (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0)
-      const disc = gross * ((Number(l.discountPercent) || 0) / 100)
+      const disc = lineDiscount(l)
       const net = gross - disc
       subtotal += gross
       discount += disc
@@ -170,6 +183,20 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
     for (const [i, l] of lines.entries()) {
       if (!l.itemName.trim())      { setError(`السطر ${i + 1}: اسم الصنف مطلوب`); return }
       if (!(Number(l.quantity) > 0)) { setError(`السطر ${i + 1}: الكمية يجب أن تكون أكبر من صفر`); return }
+
+      const gross = (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0)
+      const value = Number(l.discountValue) || 0
+      if (value < 0) {
+        setError(`السطر ${i + 1}: الخصم لا يمكن أن يكون سالباً`); return
+      }
+      if (l.discountMode === "percent" && value > 100) {
+        setError(`السطر ${i + 1}: نسبة الخصم يجب أن تكون بين 0 و 100`); return
+      }
+      if (l.discountMode === "amount" && value > gross + 0.001) {
+        setError(
+          `السطر ${i + 1}: الخصم (${value.toFixed(2)}) أكبر من قيمة السطر (${gross.toFixed(2)})`
+        ); return
+      }
     }
 
     setBusy(true)
@@ -190,7 +217,10 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
           unit: l.unit,
           quantity: Number(l.quantity),
           unitPrice: Number(l.unitPrice) || 0,
-          discountPercent: Number(l.discountPercent) || 0,
+          discountPercent:
+            l.discountMode === "percent" ? Number(l.discountValue) || 0 : 0,
+          discountAmount:
+            l.discountMode === "amount" ? lineDiscount(l) : 0,
           taxPercent: Number(l.taxPercent) || 0,
         })),
       })
@@ -236,7 +266,7 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
                   <Th width="90px">الوحدة</Th>
                   <Th align="left" width="90px">الكمية</Th>
                   <Th align="left" width="105px">السعر</Th>
-                  <Th align="left" width="80px">خصم %</Th>
+                  <Th align="left" width="128px">الخصم</Th>
                   <Th align="left" width="80px">ضريبة %</Th>
                   <Th align="left" width="115px">الإجمالي</Th>
                   <Th width="40px" />
@@ -245,7 +275,7 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
               <tbody>
                 {lines.map((l, i) => {
                   const gross = (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0)
-                  const net = gross - gross * ((Number(l.discountPercent) || 0) / 100)
+                  const net = gross - lineDiscount(l)
                   const lineTotal = net + net * ((Number(l.taxPercent) || 0) / 100)
                   const short = isSale && type === "sale" && l.productId &&
                                 (Number(l.quantity) || 0) > l.stockQty
@@ -293,11 +323,37 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
                         />
                       </Td>
                       <Td>
-                        <NumberInput
-                          value={l.discountPercent}
-                          onChange={(e) => updateLine(l.key, { discountPercent: e.target.value })}
-                          min={0} max={100} step="0.01" placeholder="0" className="h-8"
-                        />
+                        <div className="flex items-stretch gap-1">
+                          <NumberInput
+                            value={l.discountValue}
+                            onChange={(e) => updateLine(l.key, { discountValue: e.target.value })}
+                            min={0}
+                            max={l.discountMode === "percent" ? 100 : undefined}
+                            step="0.01" placeholder="0" className="h-8"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateLine(l.key, {
+                                discountMode: l.discountMode === "amount" ? "percent" : "amount",
+                              })
+                            }
+                            title={l.discountMode === "amount"
+                              ? "خصم بالمبلغ — اضغط للتحويل إلى نسبة مئوية"
+                              : "خصم بالنسبة — اضغط للتحويل إلى مبلغ"}
+                            aria-label="تبديل نوع الخصم"
+                            className="h-8 w-8 shrink-0 rounded-lg border border-border
+                                       bg-muted text-sm font-semibold
+                                       hover:bg-muted/70 transition"
+                          >
+                            {l.discountMode === "amount" ? currencySymbol : "%"}
+                          </button>
+                        </div>
+                        {l.discountMode === "percent" && lineDiscount(l) > 0 && (
+                          <p className="text-[10px] text-muted-foreground num mt-0.5">
+                            = {lineDiscount(l).toFixed(2)}
+                          </p>
+                        )}
                       </Td>
                       <Td>
                         <NumberInput

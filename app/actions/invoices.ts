@@ -16,6 +16,8 @@ import type {
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100
+
 function rowToInvoice(r: any): Invoice {
   return {
     id: r.id,
@@ -146,6 +148,21 @@ export async function createInvoiceAction(
     if ((ln.discountPercent ?? 0) < 0 || (ln.discountPercent ?? 0) > 100) {
       throw new Error(`السطر ${i + 1}: نسبة الخصم يجب أن تكون بين 0 و 100`)
     }
+    // الخصم بالمبلغ: لا يجوز أن يتجاوز قيمة السطر وإلا صار الصافي سالباً
+    const lineDiscount = ln.discountAmount ?? 0
+    if (lineDiscount < 0) {
+      throw new Error(`السطر ${i + 1}: مبلغ الخصم لا يمكن أن يكون سالباً`)
+    }
+    if (lineDiscount > 0 && (ln.discountPercent ?? 0) > 0) {
+      throw new Error(`السطر ${i + 1}: اختر خصماً بالنسبة أو بالمبلغ — لا الاثنين معاً`)
+    }
+    const lineGross = round2(ln.quantity * ln.unitPrice)
+    if (lineDiscount > lineGross) {
+      throw new Error(
+        `السطر ${i + 1}: مبلغ الخصم (${lineDiscount.toFixed(2)}) ` +
+        `أكبر من قيمة السطر (${lineGross.toFixed(2)})`
+      )
+    }
   }
 
   // فحص سقف الائتمان قبل البيع الآجل
@@ -183,6 +200,8 @@ export async function createInvoiceAction(
     quantity: ln.quantity,
     unit_price: ln.unitPrice,
     discount_percent: ln.discountPercent ?? 0,
+    // عندما تكون النسبة صفراً، تستخدم قاعدة البيانات هذا المبلغ كما هو
+    discount_amount: (ln.discountPercent ?? 0) > 0 ? 0 : round2(ln.discountAmount ?? 0),
     tax_percent: ln.taxPercent ?? 0,
     line_no: i + 1,
   }))
@@ -269,6 +288,12 @@ export async function createReturnAction(
       quantity,
       unitPrice: src.unitPrice,
       discountPercent: src.discountPercent,
+      // خصم بمبلغ ثابت يُرجَّع بالتناسب مع الكمية المرتجعة،
+      // وإلا لخُصم مبلغ الفاتورة كاملاً على مرتجع جزئي.
+      discountAmount:
+        src.discountPercent > 0 || !src.discountAmount || !(src.quantity > 0)
+          ? 0
+          : round2((src.discountAmount * quantity) / src.quantity),
       taxPercent: src.taxPercent,
     }
   })

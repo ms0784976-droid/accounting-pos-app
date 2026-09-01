@@ -90,6 +90,7 @@ export async function addProductFullAction(input: {
   minQty?: number
   taxPercent?: number | null
   notes?: string
+  allowNegativeStock?: boolean
   openingQty?: number
   openingCost?: number
   openingDate?: string
@@ -116,6 +117,9 @@ export async function addProductFullAction(input: {
       min_qty: input.minQty ?? 0,
       tax_percent: input.taxPercent ?? null,
       notes: input.notes ?? "",
+      // كان هذا الحقل مفقوداً: خانة "السماح بالبيع عند نفاد الرصيد"
+      // كانت تُتجاهل تماماً عند إنشاء صنف جديد.
+      allow_negative_stock: input.allowNegativeStock ?? false,
     })
     .select("*, product_categories(name)").single()
 

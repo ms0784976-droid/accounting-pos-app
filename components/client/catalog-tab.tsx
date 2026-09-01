@@ -12,7 +12,7 @@ import { useSession, useAsyncData, todayIn } from "@/lib/session"
 import {
   fetchProductsFullAction, addProductFullAction, updateProductFullAction,
   fetchProductCategoriesAction, addProductCategoryAction, deleteProductCategoryAction,
-  setStockOpeningBalanceAction,
+  applyStockTakeAction,
 } from "@/app/actions/inventory"
 import {
   PageHeader, SectionCard, DataTable, Th, Td, Tr, TotalRow, Money, Badge,
@@ -82,9 +82,9 @@ export function CatalogTab() {
   const handleExport = () => {
     exportToCsv(
       `الأصناف-${todayIn(company?.timezone)}.csv`,
-      ["الاسم", "الكود", "الباركود", "التصنيف", "النوع", "الوحدة", "الرصيد", "الحد الأدنى", "التكلفة المرجحة", "سعر البيع"],
+      ["الاسم", "الوصف", "الكود", "الباركود", "التصنيف", "النوع", "الوحدة", "الرصيد", "الحد الأدنى", "التكلفة المرجحة", "سعر البيع"],
       rows.map((p) => [
-        p.name, p.sku, p.barcode, p.category, PRODUCT_TYPE_META[p.type].label,
+        p.name, p.notes, p.sku, p.barcode, p.category, PRODUCT_TYPE_META[p.type].label,
         p.unit, p.stockQty.toString(), p.minQty.toString(),
         p.avgCost.toFixed(4), p.lastPrice.toFixed(2),
       ])
@@ -174,6 +174,12 @@ export function CatalogTab() {
                       onClick={can("manageProducts") ? () => setEditing(p) : undefined}>
                     <Td>
                       <div className="font-medium text-sm">{p.name}</div>
+                      {p.notes && (
+                        <div className="text-[11px] text-foreground/70 leading-snug mt-0.5"
+                             title={p.notes}>
+                          {p.notes}
+                        </div>
+                      )}
                       <div className="text-[10px] text-muted-foreground num">
                         {p.sku || "—"}
                         {p.barcode && ` · ${p.barcode}`}
@@ -278,8 +284,19 @@ function ProductForm({ product, onClose, onSaved }: {
   }))
 
   const [opening, setOpening] = useState({ qty: "", cost: "", date: todayIn(tz) })
+  // تصحيح رصيد صنف قائم — نُدخل الرصيد الفعلي، والنظام يسجّل الفرق فقط
+  const [adjust, setAdjust] = useState({ qty: "", date: todayIn(tz), note: "" })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
+
+  /** الفرق بين الرصيد الفعلي المُدخل والرصيد الدفتري — null إذا لم يُدخل شيء */
+  const adjustDiff = useMemo(() => {
+    if (!product || adjust.qty.trim() === "") return null
+    const target = Number(adjust.qty)
+    if (!Number.isFinite(target)) return null
+    const diff = target - product.stockQty
+    return Math.abs(diff) < 0.0001 ? 0 : diff
+  }, [product, adjust.qty])
 
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) =>
     setForm((f) => ({ ...f, [k]: v }))
@@ -319,11 +336,17 @@ function ProductForm({ product, onClose, onSaved }: {
           ...(can("editCosts") ? { lastCost: Number(form.lastCost) || 0 } : {}),
         })
 
-        if (Number(opening.qty) > 0) {
-          await setStockOpeningBalanceAction(
-            product.id, Number(opening.qty), Number(opening.cost) || 0, opening.date
+        // تصحيح الرصيد: نسجّل الفرق كتسوية جرد — لا نضيف الرقم على الرصيد
+        if (adjustDiff !== null && adjustDiff !== 0) {
+          await applyStockTakeAction(
+            adjust.date,
+            [{ productId: product.id, countedQty: Number(adjust.qty) }],
+            adjust.note.trim() || "تصحيح رصيد من شاشة الأصناف"
           )
-          notify("تم تسجيل الرصيد الافتتاحي كقيد محاسبي")
+          notify(
+            `تم تعديل الرصيد إلى ${formatQty(Number(adjust.qty))} ` +
+            `(تسوية ${adjustDiff > 0 ? "+" : ""}${formatQty(adjustDiff)})`
+          )
         }
       } else {
         await addProductFullAction({
@@ -484,31 +507,74 @@ function ProductForm({ product, onClose, onSaved }: {
               <span className="text-foreground/85">السماح بالبيع عند نفاد الرصيد</span>
             </label>
 
-            <div className="rounded-lg bg-muted/40 p-3 space-y-3">
-              <InfoNote>
-                {product
-                  ? "إضافة رصيد افتتاحي تُسجَّل كحركة مخزون وقيد محاسبي مقابل حقوق الملكية."
-                  : "الرصيد الافتتاحي يسجّل الكمية الموجودة فعلاً قبل استخدام البرنامج، كقيد محاسبي — لا كفاتورة شراء وهمية."}
-              </InfoNote>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <Field label="الكمية الافتتاحية">
-                  <NumberInput value={opening.qty}
-                               onChange={(e) => setOpening((o) => ({ ...o, qty: e.target.value }))}
-                               min={0} step="0.001" placeholder="0" />
-                </Field>
-                <Field label="تكلفة الوحدة">
-                  <NumberInput value={opening.cost}
-                               onChange={(e) => setOpening((o) => ({ ...o, cost: e.target.value }))}
-                               min={0} step="0.01"
-                               placeholder={form.lastCost || "0.00"} />
-                </Field>
-                <Field label="التاريخ">
-                  <TextInput type="date" value={opening.date}
-                             onChange={(e) => setOpening((o) => ({ ...o, date: e.target.value }))}
-                             className="num" />
-                </Field>
+            {/* صنف جديد → رصيد افتتاحي. صنف قائم → تصحيح رصيد بالفرق. */}
+            {!product ? (
+              <div className="rounded-lg bg-muted/40 p-3 space-y-3">
+                <InfoNote>
+                  الرصيد الافتتاحي يسجّل الكمية الموجودة فعلاً قبل استخدام البرنامج،
+                  كقيد محاسبي — لا كفاتورة شراء وهمية.
+                </InfoNote>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <Field label="الكمية الافتتاحية">
+                    <NumberInput value={opening.qty}
+                                 onChange={(e) => setOpening((o) => ({ ...o, qty: e.target.value }))}
+                                 min={0} step="0.001" placeholder="0" />
+                  </Field>
+                  <Field label="تكلفة الوحدة">
+                    <NumberInput value={opening.cost}
+                                 onChange={(e) => setOpening((o) => ({ ...o, cost: e.target.value }))}
+                                 min={0} step="0.01"
+                                 placeholder={form.lastCost || "0.00"} />
+                  </Field>
+                  <Field label="التاريخ">
+                    <TextInput type="date" value={opening.date}
+                               onChange={(e) => setOpening((o) => ({ ...o, date: e.target.value }))}
+                               className="num" />
+                  </Field>
+                </div>
               </div>
-            </div>
+            ) : can("editCosts") ? (
+              <div className="rounded-lg bg-muted/40 p-3 space-y-3">
+                <InfoNote>
+                  اكتب الرصيد <strong>الفعلي</strong> الموجود عندك الآن. النظام يسجّل
+                  الفرق فقط كتسوية مخزون بقيد محاسبي — ولا يجمع الرقم على الرصيد الحالي.
+                  اتركه فارغاً إن لم ترد تعديل الرصيد.
+                </InfoNote>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <Field label="الرصيد الفعلي الآن"
+                         hint={`الرصيد الدفتري ${formatQty(product.stockQty)}`}>
+                    <NumberInput value={adjust.qty}
+                                 onChange={(e) => setAdjust((a) => ({ ...a, qty: e.target.value }))}
+                                 step="0.001"
+                                 placeholder={formatQty(product.stockQty)} />
+                  </Field>
+                  <Field label="التاريخ">
+                    <TextInput type="date" value={adjust.date}
+                               onChange={(e) => setAdjust((a) => ({ ...a, date: e.target.value }))}
+                               className="num" />
+                  </Field>
+                  <Field label="سبب التعديل">
+                    <TextInput value={adjust.note}
+                               onChange={(e) => setAdjust((a) => ({ ...a, note: e.target.value }))}
+                               placeholder="جرد فعلي / تصحيح إدخال" />
+                  </Field>
+                </div>
+
+                {adjustDiff !== null && (
+                  <p className={`text-xs num ${
+                    adjustDiff === 0 ? "text-muted-foreground"
+                    : adjustDiff > 0 ? "text-success" : "text-warning"
+                  }`}>
+                    {adjustDiff === 0
+                      ? "لا فرق — لن تُسجَّل أي حركة."
+                      : `سيتم تسجيل تسوية ${adjustDiff > 0 ? "زيادة" : "نقص"} بمقدار ${formatQty(Math.abs(adjustDiff))} ` +
+                        `(من ${formatQty(product.stockQty)} إلى ${formatQty(Number(adjust.qty))}).`}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <InfoNote>تعديل رصيد المخزون يحتاج صلاحية أعلى.</InfoNote>
+            )}
           </div>
         )}
 
