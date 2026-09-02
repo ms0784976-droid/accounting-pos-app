@@ -7,7 +7,7 @@
 // المبيعات ناقص المشتريات. هنا ستة تقارير محاسبية حقيقية مبنية على
 // القيود، كلها قابلة للطباعة والتصدير.
 
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { useSession, useAsyncData, resolvePreset } from "@/lib/session"
 import {
   fetchProfitAndLossAction, fetchBalanceSheetAction, fetchTrialBalanceAction,
@@ -18,10 +18,11 @@ import {
   PageHeader, SectionCard, DataTable, Th, Td, Tr, TotalRow, Money,
   EmptyState, TableSkeleton, InlineError, InfoNote, DateRangePicker,
   SelectInput, TabBar, Btn, StatCard, Badge, BalanceBadge, SearchBox,
-  formatDate, formatQty, exportToCsv, printArea,
+  formatDate, formatQty, exportToCsv, printArea, balanceTone,
 } from "./ui"
 import { DATE_PRESETS, ACCOUNT_TYPE_META, PARTY_KIND_META } from "@/lib/constants"
 import type { FinancialLine } from "@/lib/types"
+import { buildStatementView } from "@/lib/statement"
 import {
   Download, Printer, TrendingUp, Landmark, Receipt, FileText, User,
 } from "lucide-react"
@@ -53,14 +54,17 @@ export function ReportsTab() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="التقارير"
-        subtitle="كل الأرقام مصدرها القيود المحاسبية — لا حسابات تقريبية"
-        actions={<Btn variant="outline" size="sm" icon={Printer} onClick={printArea}>طباعة</Btn>}
-      />
+      {/* عنوان الشاشة وأدوات الفلترة لا تُطبع — الورقة للتقرير وحده */}
+      <div className="no-print">
+        <PageHeader
+          title="التقارير"
+          subtitle="كل الأرقام مصدرها القيود المحاسبية — لا حسابات تقريبية"
+          actions={<Btn variant="outline" size="sm" icon={Printer} onClick={printArea}>طباعة</Btn>}
+        />
+      </div>
 
       <SectionCard>
-        <div className="px-5 pt-4 pb-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="no-print px-5 pt-4 pb-3 flex flex-wrap items-center justify-between gap-3">
           <TabBar<ReportId> tabs={REPORTS} active={report} onChange={setReport} />
           <div className="flex flex-wrap items-center gap-2">
             <SelectInput value={preset} onChange={(e) => applyPreset(e.target.value)}
@@ -666,13 +670,12 @@ function PartyStatementReport({ range }: { range: Range }) {
            p.phone.includes(q)
   })
 
-  const rows = statement.data ?? []
-  const totals = rows.reduce(
-    (acc, r) => ({ debit: acc.debit + r.debit, credit: acc.credit + r.credit }),
-    { debit: 0, credit: 0 }
-  )
-  const closing = rows.length ? rows[rows.length - 1].runningBalance : 0
-  const opening = rows.length ? rows[0].runningBalance : 0
+  // نفس معالجة كشف الحساب في شاشة الزبائن — مصدر واحد للمنطق
+  const view = useMemo(() => buildStatementView(statement.data), [statement.data])
+  const rows = view.rows
+  const totals = { debit: view.totalDebit, credit: view.totalCredit }
+  const closing = view.closing
+  const opening = view.opening
 
   const handleExport = () => {
     if (!party || !rows.length) return
@@ -788,26 +791,37 @@ function PartyStatementReport({ range }: { range: Range }) {
                 </thead>
                 <tbody>
                   {rows.map((r, i) => (
-                    <Tr key={i} className={r.docType === "opening" ? "bg-muted/40" : ""}>
+                    <Tr key={i} className={!r.date ? "bg-muted/40" : ""}>
                       <Td mono className="text-xs">{r.date ? formatDate(r.date) : "—"}</Td>
                       <Td mono className="text-xs text-muted-foreground">{r.docNo}</Td>
                       <Td className="text-xs">{r.description}</Td>
                       <Td align="left">
-                        {r.debit ? <Money value={r.debit} currency={currency} /> : "—"}
+                        {r.debit
+                          ? <Money value={r.debit} currency={currency} className="text-danger" />
+                          : <span className="text-muted-foreground">—</span>}
                       </Td>
                       <Td align="left">
-                        {r.credit ? <Money value={r.credit} currency={currency} /> : "—"}
+                        {r.credit
+                          ? <Money value={r.credit} currency={currency} className="text-success" />
+                          : <span className="text-muted-foreground">—</span>}
                       </Td>
                       <Td align="left">
-                        <Money value={r.runningBalance} currency={currency} colored bold />
+                        <Money value={r.runningBalance} currency={currency} bold
+                               className={balanceTone(r.runningBalance)} />
                       </Td>
                     </Tr>
                   ))}
                   <TotalRow>
                     <Td colSpan={3}>الإجمالي</Td>
-                    <Td align="left"><Money value={totals.debit} currency={currency} bold /></Td>
-                    <Td align="left"><Money value={totals.credit} currency={currency} bold /></Td>
-                    <Td align="left"><Money value={closing} currency={currency} colored bold /></Td>
+                    <Td align="left">
+                      <Money value={totals.debit} currency={currency} bold className="text-danger" />
+                    </Td>
+                    <Td align="left">
+                      <Money value={totals.credit} currency={currency} bold className="text-success" />
+                    </Td>
+                    <Td align="left">
+                      <Money value={closing} currency={currency} bold className={balanceTone(closing)} />
+                    </Td>
                   </TotalRow>
                 </tbody>
               </DataTable>

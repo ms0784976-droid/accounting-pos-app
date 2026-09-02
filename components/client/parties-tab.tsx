@@ -27,6 +27,7 @@ import {
   ArrowDownLeft, ArrowUpRight, Users,
 } from "lucide-react"
 import { describeError } from "@/lib/errors"
+import { buildStatementView } from "@/lib/statement"
 
 type View = "all" | "customer" | "supplier"
 
@@ -477,46 +478,8 @@ function StatementDrawer({ party, onClose }: {
   )
   const invoices = useAsyncData(() => fetchPartyInvoicesAction(party.id), [party.id])
 
-  /**
-   * ترتيب الحركات وإعادة حساب الرصيد المتراكم.
-   *
-   * المشكلة التي كانت تظهر: دالة party_statement تُرجع الصفوف بترتيب غير
-   * مضمون عندما تحمل الحركات نفس التاريخ، فيظهر سند القبض قبل الفاتورة،
-   * ويصير عمود "الرصيد" يقفز (438 → 915 → 315) بلا معنى، ويعرض تذييل
-   * الجدول رصيد آخر صف حسب ترتيب الوصول لا الرصيد الحقيقي.
-   *
-   * الحل: نرتّب هنا (رصيد مدوّر أولاً، ثم بالتاريخ ثم برقم المستند)
-   * ونعيد حساب الرصيد تراكمياً بأنفسنا، فيصبح العمود متسقاً دائماً
-   * وينتهي بنفس رصيد الزبون الظاهر في الأعلى.
-   */
-  const view = useMemo(() => {
-    const src = statement.data ?? []
-    const carried = src.filter((r) => !r.date)
-    const moves = src
-      .filter((r) => !!r.date)
-      .sort((a, b) => {
-        if (a.date !== b.date) return (a.date ?? "") < (b.date ?? "") ? -1 : 1
-        return (a.docNo ?? "").localeCompare(b.docNo ?? "", "en")
-      })
-
-    // الرصيد المدوّر هو نقطة البداية
-    let running = carried.length ? carried[carried.length - 1].runningBalance : 0
-
-    const rows = [
-      ...carried.map((r) => ({ ...r, runningBalance: running })),
-      ...moves.map((r) => {
-        running = Math.round((running + r.debit - r.credit) * 100) / 100
-        return { ...r, runningBalance: running }
-      }),
-    ]
-
-    return {
-      rows,
-      closing: running,
-      totalDebit: rows.reduce((s, r) => s + r.debit, 0),
-      totalCredit: rows.reduce((s, r) => s + r.credit, 0),
-    }
-  }, [statement.data])
+  // الترتيب وإعادة حساب الرصيد المتراكم — انظر lib/statement.ts للتفصيل
+  const view = useMemo(() => buildStatementView(statement.data), [statement.data])
 
   const handleExport = () => {
     if (!view.rows.length) return
@@ -546,10 +509,17 @@ function StatementDrawer({ party, onClose }: {
     >
       <div className="print-area">
         <div className="px-5 py-4 border-b border-border flex flex-wrap items-center justify-between gap-3">
-          <DateRangePicker
-            from={range.from} to={range.to}
-            onChange={(from, to) => setRange({ from, to })}
-          />
+          <div className="no-print">
+            <DateRangePicker
+              from={range.from} to={range.to}
+              onChange={(from, to) => setRange({ from, to })}
+            />
+          </div>
+          {/* على الورق نكتب الفترة نصاً بدل حقول التاريخ */}
+          <div className="hidden print:block">
+            <p className="text-[11px] text-muted-foreground">الفترة</p>
+            <p className="text-sm num">{formatDate(range.from)} — {formatDate(range.to)}</p>
+          </div>
           <div className="text-left">
             <p className="text-[11px] text-muted-foreground">الرصيد الحالي</p>
             <BalanceBadge balance={party.balance} currency={currency} />
