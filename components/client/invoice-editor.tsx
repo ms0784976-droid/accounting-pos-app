@@ -585,6 +585,11 @@ function ProductPicker({ products, loading, isSale, onPick, onClose }: {
                   >
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-foreground truncate">{p.name}</p>
+                      {p.notes && (
+                        <p className="text-[11px] text-foreground/70 truncate" title={p.notes}>
+                          {p.notes}
+                        </p>
+                      )}
                       <p className="text-[11px] text-muted-foreground num">
                         {p.sku || "—"}
                         {p.type !== "service" && ` · الرصيد ${formatQty(p.stockQty)}`}

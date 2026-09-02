@@ -18,6 +18,7 @@ import {
   EmptyState, TableSkeleton, InlineError, InfoNote, Modal, Drawer, ConfirmDialog,
   Field, TextInput, NumberInput, SelectInput, TextArea, SearchBox, DateRangePicker,
   Btn, IconBtn, TabBar, StatCard, useToast, formatDate, exportToCsv, printArea,
+  balanceTone,
 } from "./ui"
 import { PARTY_KIND_META, INVOICE_TYPE_META, INVOICE_STATUS_META } from "@/lib/constants"
 import type { PartyKind, PartyWithBalance } from "@/lib/types"
@@ -195,11 +196,15 @@ export function PartiesTab({ kind = "all" }: { kind?: View } = {}) {
                   </Td>
                   <Td><Badge label={PARTY_KIND_META[p.kind].label} tint={PARTY_KIND_META[p.kind].tint} /></Td>
                   <Td mono className="text-xs" align="left">{p.phone || "—"}</Td>
-                  <Td align="left" className="text-muted-foreground">
-                    <Money value={p.totalDebit} currency={currency} />
+                  <Td align="left">
+                    {p.totalDebit
+                      ? <Money value={p.totalDebit} currency={currency} className="text-danger" />
+                      : <span className="text-muted-foreground">—</span>}
                   </Td>
-                  <Td align="left" className="text-muted-foreground">
-                    <Money value={p.totalCredit} currency={currency} />
+                  <Td align="left">
+                    {p.totalCredit
+                      ? <Money value={p.totalCredit} currency={currency} className="text-success" />
+                      : <span className="text-muted-foreground">—</span>}
                   </Td>
                   <Td align="left"><BalanceBadge balance={p.balance} currency={currency} /></Td>
                   <Td align="center">
@@ -216,9 +221,18 @@ export function PartiesTab({ kind = "all" }: { kind?: View } = {}) {
               ))}
               <TotalRow>
                 <Td colSpan={4}>الإجمالي ({rows.length})</Td>
-                <Td align="left"><Money value={rows.reduce((s, p) => s + p.totalDebit, 0)} currency={currency} /></Td>
-                <Td align="left"><Money value={rows.reduce((s, p) => s + p.totalCredit, 0)} currency={currency} /></Td>
-                <Td align="left"><Money value={rows.reduce((s, p) => s + p.balance, 0)} currency={currency} colored /></Td>
+                <Td align="left">
+                  <Money value={rows.reduce((s, p) => s + p.totalDebit, 0)}
+                         currency={currency} className="text-danger" />
+                </Td>
+                <Td align="left">
+                  <Money value={rows.reduce((s, p) => s + p.totalCredit, 0)}
+                         currency={currency} className="text-success" />
+                </Td>
+                <Td align="left">
+                  <Money value={rows.reduce((s, p) => s + p.balance, 0)} currency={currency} bold
+                         className={balanceTone(rows.reduce((s, p) => s + p.balance, 0))} />
+                </Td>
                 <Td />
               </TotalRow>
             </tbody>
@@ -463,12 +477,53 @@ function StatementDrawer({ party, onClose }: {
   )
   const invoices = useAsyncData(() => fetchPartyInvoicesAction(party.id), [party.id])
 
+  /**
+   * ترتيب الحركات وإعادة حساب الرصيد المتراكم.
+   *
+   * المشكلة التي كانت تظهر: دالة party_statement تُرجع الصفوف بترتيب غير
+   * مضمون عندما تحمل الحركات نفس التاريخ، فيظهر سند القبض قبل الفاتورة،
+   * ويصير عمود "الرصيد" يقفز (438 → 915 → 315) بلا معنى، ويعرض تذييل
+   * الجدول رصيد آخر صف حسب ترتيب الوصول لا الرصيد الحقيقي.
+   *
+   * الحل: نرتّب هنا (رصيد مدوّر أولاً، ثم بالتاريخ ثم برقم المستند)
+   * ونعيد حساب الرصيد تراكمياً بأنفسنا، فيصبح العمود متسقاً دائماً
+   * وينتهي بنفس رصيد الزبون الظاهر في الأعلى.
+   */
+  const view = useMemo(() => {
+    const src = statement.data ?? []
+    const carried = src.filter((r) => !r.date)
+    const moves = src
+      .filter((r) => !!r.date)
+      .sort((a, b) => {
+        if (a.date !== b.date) return (a.date ?? "") < (b.date ?? "") ? -1 : 1
+        return (a.docNo ?? "").localeCompare(b.docNo ?? "", "en")
+      })
+
+    // الرصيد المدوّر هو نقطة البداية
+    let running = carried.length ? carried[carried.length - 1].runningBalance : 0
+
+    const rows = [
+      ...carried.map((r) => ({ ...r, runningBalance: running })),
+      ...moves.map((r) => {
+        running = Math.round((running + r.debit - r.credit) * 100) / 100
+        return { ...r, runningBalance: running }
+      }),
+    ]
+
+    return {
+      rows,
+      closing: running,
+      totalDebit: rows.reduce((s, r) => s + r.debit, 0),
+      totalCredit: rows.reduce((s, r) => s + r.credit, 0),
+    }
+  }, [statement.data])
+
   const handleExport = () => {
-    if (!statement.data) return
+    if (!view.rows.length) return
     exportToCsv(
       `كشف-حساب-${party.name}-${range.from}_${range.to}.csv`,
       ["التاريخ", "المستند", "البيان", "مدين", "دائن", "الرصيد"],
-      statement.data.map((r) => [
+      view.rows.map((r) => [
         r.date ?? "", r.docNo, r.description,
         r.debit.toFixed(2), r.credit.toFixed(2), r.runningBalance.toFixed(2),
       ])
@@ -517,7 +572,7 @@ function StatementDrawer({ party, onClose }: {
             <TableSkeleton rows={6} cols={6} />
           ) : statement.error ? (
             <div className="p-5"><InlineError message={statement.error} /></div>
-          ) : !statement.data?.length ? (
+          ) : !view.rows.length ? (
             <EmptyState message="لا حركات في هذه الفترة" />
           ) : (
             <DataTable>
@@ -532,23 +587,38 @@ function StatementDrawer({ party, onClose }: {
                 </tr>
               </thead>
               <tbody>
-                {statement.data.map((r, i) => (
-                  <Tr key={i} className={r.docType === "opening" ? "bg-muted/40" : ""}>
+                {view.rows.map((r, i) => (
+                  <Tr key={i} className={!r.date ? "bg-muted/40" : ""}>
                     <Td mono className="text-xs">{r.date ? formatDate(r.date) : "—"}</Td>
                     <Td mono className="text-xs text-muted-foreground">{r.docNo}</Td>
                     <Td className="text-xs">{r.description}</Td>
-                    <Td align="left">{r.debit ? <Money value={r.debit} currency={currency} /> : "—"}</Td>
-                    <Td align="left">{r.credit ? <Money value={r.credit} currency={currency} /> : "—"}</Td>
-                    <Td align="left"><Money value={r.runningBalance} currency={currency} colored bold /></Td>
+                    <Td align="left">
+                      {r.debit
+                        ? <Money value={r.debit} currency={currency} className="text-danger" />
+                        : <span className="text-muted-foreground">—</span>}
+                    </Td>
+                    <Td align="left">
+                      {r.credit
+                        ? <Money value={r.credit} currency={currency} className="text-success" />
+                        : <span className="text-muted-foreground">—</span>}
+                    </Td>
+                    <Td align="left">
+                      <Money value={r.runningBalance} currency={currency} bold
+                             className={balanceTone(r.runningBalance)} />
+                    </Td>
                   </Tr>
                 ))}
                 <TotalRow>
                   <Td colSpan={3}>الإجمالي</Td>
-                  <Td align="left"><Money value={statement.data.reduce((s, r) => s + r.debit, 0)} currency={currency} /></Td>
-                  <Td align="left"><Money value={statement.data.reduce((s, r) => s + r.credit, 0)} currency={currency} /></Td>
                   <Td align="left">
-                    <Money value={statement.data[statement.data.length - 1]?.runningBalance ?? 0}
-                           currency={currency} colored />
+                    <Money value={view.totalDebit} currency={currency} className="text-danger" />
+                  </Td>
+                  <Td align="left">
+                    <Money value={view.totalCredit} currency={currency} className="text-success" />
+                  </Td>
+                  <Td align="left">
+                    <Money value={view.closing} currency={currency} bold
+                           className={balanceTone(view.closing)} />
                   </Td>
                 </TotalRow>
               </tbody>

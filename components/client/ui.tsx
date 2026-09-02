@@ -31,13 +31,33 @@ export function formatQty(value: number): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 }).format(value)
 }
 
+/**
+ * تاريخ بصيغة يوم/شهر/سنة.
+ *
+ * ⚠️ الحرف U+200E في البداية مقصود: بدونه يعيد المتصفح ترتيب "02/09/2026"
+ * داخل صفحة عربية (RTL) فتظهر مشوّهة مثل "022026/09/". العلامة غير مرئية
+ * وتُثبّت اتجاه النص من اليسار لليمين مهما كان السياق.
+ * كذلك نستخدم en-GB بدل ar-EG لأن الأخيرة تُدخل علامات اتجاه خفية.
+ */
 export function formatDate(value?: string | null): string {
   if (!value) return "—"
   const d = new Date(value)
   if (isNaN(d.getTime())) return value
-  return new Intl.DateTimeFormat("ar-EG-u-nu-latn", {
+  return "‎" + new Intl.DateTimeFormat("en-GB", {
     year: "numeric", month: "2-digit", day: "2-digit",
   }).format(d)
+}
+
+/**
+ * لون الرصيد المحاسبي — عكس اصطلاح الربح/الخسارة عمداً:
+ *   موجب  = مدين  = "عليه"  → أحمر (دَين على الزبون)
+ *   سالب  = دائن  = "له"    → أخضر (دفع زيادة أو له رصيد)
+ * هذا يطابق شارة BalanceBadge حتى لا يظهر نفس الرقم بلونين مختلفين.
+ */
+export function balanceTone(value: number): string {
+  if (value > 0.009) return "text-danger"
+  if (value < -0.009) return "text-success"
+  return "text-muted-foreground"
 }
 
 export function formatDateTime(value?: string | null): string {
