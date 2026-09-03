@@ -14,17 +14,17 @@ import { useState, useMemo, useEffect, useRef } from "react"
 import { useSession, useAsyncData, todayIn } from "@/lib/session"
 import { createInvoiceAction } from "@/app/actions/invoices"
 import { fetchProductsFullAction, findProductByBarcodeAction } from "@/app/actions/inventory"
-import { fetchPartiesAction } from "@/app/actions/parties"
-import { fetchCashAccountsAction } from "@/app/actions/treasury"
+import { fetchPartiesAction, addPartyAction } from "@/app/actions/parties"
+import { fetchCashAccountsAction, createVoucherAction } from "@/app/actions/treasury"
 import {
   SectionCard, DataTable, Th, Td, Money, Field, TextInput, NumberInput,
   SelectInput, TextArea, Btn, IconBtn, InlineError, InfoNote, EmptyState,
-  useToast, formatQty,
+  Modal, useToast, formatQty,
 } from "./ui"
 import { UNITS } from "@/lib/units"
 import { INVOICE_TYPE_META, CURRENCY_MAP } from "@/lib/constants"
 import type {
-  InvoiceType, PaymentMethod, UnitCode, Product, InvoiceWithLines,
+  InvoiceType, PaymentMethod, UnitCode, Product, InvoiceWithLines, PartyKind,
 } from "@/lib/types"
 import { Plus, Trash2, ScanLine, Search, Save, X } from "lucide-react"
 import { describeError } from "@/lib/errors"
@@ -58,7 +58,7 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
   onSaved: (invoice: InvoiceWithLines) => void
   onCancel?: () => void
 }) {
-  const { currency, company } = useSession()
+  const { currency, company, can } = useSession()
   const { notify } = useToast()
   const tz = company?.timezone ?? "Asia/Hebron"
   const meta = INVOICE_TYPE_META[type]
@@ -83,6 +83,9 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const [picker, setPicker] = useState(false)
+  const [addingParty, setAddingParty] = useState(false)
+  /** المبلغ المقبوض نقداً عند إصدار فاتورة آجلة — الباقي يبقى على الحساب */
+  const [paidNow, setPaidNow] = useState("")
 
   const defaultCash = cash.data?.find((c) => c.isDefault) ?? cash.data?.[0]
   const selectedCash = cashId || defaultCash?.id || ""
@@ -146,6 +149,9 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
       total: subtotal - discount + tax,
     }
   }, [lines])
+
+  /** المبلغ المدفوع فعلياً بعد التحقق — لا يتجاوز إجمالي الفاتورة */
+  const paidAmount = Math.max(0, Math.min(Number(paidNow) || 0, totals.total))
 
   /* ── تحذيرات قبل الحفظ ── */
 
@@ -225,6 +231,44 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
         })),
       })
       notify(`تم حفظ الفاتورة ${invoice.invoiceNo}`)
+
+      /* ── الدفعة عند الإصدار ──
+         تُسجَّل كسند قبض/صرف مستقل، وهذا هو الصحيح محاسبياً: الفاتورة
+         تُثبت الذمّة كاملة، والسند يُسقط منها المدفوع، فيبقى الباقي على
+         الحساب بأثر واضح في كشف الحساب.
+
+         تُنفَّذ بعد نجاح الفاتورة. لو فشل السند لأي سبب فالفاتورة محفوظة
+         سليمة — ونخبر المستخدم بوضوح بدل أن نُخفي الأمر. */
+      if (method === "credit" && partyId && paidAmount > 0) {
+        try {
+          if (!selectedCash) throw new Error("لم يُحدَّد الصندوق أو البنك")
+          await createVoucherAction({
+            type: isSale ? "receipt" : "payment",
+            partyId,
+            cashAccountId: selectedCash,
+            date,
+            amount: paidAmount,
+            method: "cash",
+            reference: invoice.invoiceNo,
+            notes: `دفعة عند إصدار الفاتورة ${invoice.invoiceNo}`,
+          })
+          const rest = Math.max(0, totals.total - paidAmount)
+          notify(
+            rest > 0.009
+              ? `سُجّلت دفعة ${paidAmount.toFixed(2)} — والباقي على الحساب ${rest.toFixed(2)}`
+              : `سُجّلت الدفعة كاملة ${paidAmount.toFixed(2)}`
+          )
+        } catch (payErr) {
+          setError(
+            `الفاتورة ${invoice.invoiceNo} حُفظت بنجاح، لكن تعذّر تسجيل الدفعة: ` +
+            describeError(payErr, "خطأ غير معروف") +
+            " — سجّلها يدوياً من شاشة سندات القبض والصرف."
+          )
+          setBusy(false)
+          return
+        }
+      }
+
       onSaved(invoice)
     } catch (e) {
       setError(describeError(e, "تعذّر حفظ الفاتورة"))
@@ -388,15 +432,32 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
       <div className="space-y-4 lg:sticky lg:top-20">
         <SectionCard title={meta.label} padded>
           <div className="space-y-3.5">
-            <Field label={meta.partyLabel} required={method === "credit"}>
-              <SelectInput value={partyId} onChange={(e) => setPartyId(e.target.value)}>
-                <option value="">{isSale ? "زبون نقدي" : "بدون مورد"}</option>
-                {(parties.data ?? []).filter((p) => p.isActive).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}{Math.abs(p.balance) > 0.009 ? ` (${p.balance.toFixed(2)})` : ""}
-                  </option>
-                ))}
-              </SelectInput>
+            <Field
+              label={meta.partyLabel}
+              required={method === "credit"}
+              hint={`"${isSale ? "زبون نقدي" : "بدون مورد"}" لا يُسجَّل في القائمة`}
+            >
+              <div className="flex items-stretch gap-1.5">
+                <SelectInput value={partyId} onChange={(e) => setPartyId(e.target.value)}>
+                  <option value="">{isSale ? "زبون نقدي" : "بدون مورد"}</option>
+                  {(parties.data ?? []).filter((p) => p.isActive).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}{Math.abs(p.balance) > 0.009 ? ` (${p.balance.toFixed(2)})` : ""}
+                    </option>
+                  ))}
+                </SelectInput>
+                <button
+                  type="button"
+                  onClick={() => setAddingParty(true)}
+                  title={isSale ? "إضافة زبون جديد" : "إضافة مورد جديد"}
+                  aria-label={isSale ? "إضافة زبون جديد" : "إضافة مورد جديد"}
+                  className="h-9 w-9 shrink-0 rounded-lg border border-border bg-muted
+                             flex items-center justify-center
+                             hover:bg-muted/70 hover:border-border-strong transition"
+                >
+                  <Plus className="size-4" />
+                </button>
+              </div>
             </Field>
 
             <div className="grid grid-cols-2 gap-3">
@@ -415,11 +476,51 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
             </div>
 
             {method === "credit" ? (
-              <Field label="تاريخ الاستحقاق"
-                     hint={selectedParty?.paymentTermsDays ? `مهلة ${selectedParty.paymentTermsDays} يوم` : undefined}>
-                <TextInput type="date" value={dueDate}
-                           onChange={(e) => setDueDate(e.target.value)} className="num" />
-              </Field>
+              <>
+                <Field label="تاريخ الاستحقاق"
+                       hint={selectedParty?.paymentTermsDays ? `مهلة ${selectedParty.paymentTermsDays} يوم` : undefined}>
+                  <TextInput type="date" value={dueDate}
+                             onChange={(e) => setDueDate(e.target.value)} className="num" />
+                </Field>
+
+                {/* دفعة عند الإصدار — يُسجَّل سند قبض/صرف تلقائياً والباقي على الحساب */}
+                {partyId && can("managePayments") && (
+                  <div className="rounded-lg bg-muted/40 p-3 space-y-3">
+                    <Field
+                      label={isSale ? "المقبوض الآن (اختياري)" : "المدفوع الآن (اختياري)"}
+                      hint={
+                        paidAmount > 0
+                          ? `الباقي على الحساب ${(totals.total - paidAmount).toFixed(2)}`
+                          : "اتركه فارغاً إذا كانت الفاتورة كاملة على الحساب"
+                      }
+                    >
+                      <NumberInput
+                        value={paidNow}
+                        onChange={(e) => setPaidNow(e.target.value)}
+                        min={0} step="0.01" placeholder="0.00"
+                      />
+                    </Field>
+
+                    {paidAmount > 0 && (
+                      <Field label="الصندوق / البنك" required>
+                        <SelectInput value={selectedCash} onChange={(e) => setCashId(e.target.value)}>
+                          {(cash.data ?? []).filter((c) => c.isActive).map((c) => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                          ))}
+                        </SelectInput>
+                      </Field>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setPaidNow(totals.total.toFixed(2))}
+                      className="text-[11px] text-primary hover:underline"
+                    >
+                      دفع المبلغ كاملاً ({totals.total.toFixed(2)})
+                    </button>
+                  </div>
+                )}
+              </>
             ) : (
               <Field label="الصندوق / البنك" required>
                 <SelectInput value={selectedCash} onChange={(e) => setCashId(e.target.value)}>
@@ -494,7 +595,103 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
           onClose={() => setPicker(false)}
         />
       )}
+
+      {addingParty && (
+        <QuickPartyModal
+          kind={isSale ? "customer" : "supplier"}
+          onClose={() => setAddingParty(false)}
+          onCreated={async (id) => {
+            setAddingParty(false)
+            await parties.reload()
+            setPartyId(id)
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+/* ================================================================ */
+/* إضافة زبون أو مورد سريعاً من داخل الفاتورة                        */
+/* ================================================================ */
+/**
+ * الحد الأدنى فقط: الاسم مطلوب والهاتف اختياري. باقي البيانات
+ * (السقف الائتماني، مهلة السداد، العنوان…) تُستكمل لاحقاً من شاشة
+ * الزبائن — الهدف هنا ألّا تتوقف عملية البيع لإدخال بيانات كاملة.
+ *
+ * "زبون نقدي" لا يمر من هنا إطلاقاً: هو ببساطة عدم اختيار جهة،
+ * فلا يُسجَّل شيء في قائمة الزبائن.
+ */
+function QuickPartyModal({ kind, onClose, onCreated }: {
+  kind: PartyKind
+  onClose: () => void
+  onCreated: (id: string) => void | Promise<void>
+}) {
+  const { notify } = useToast()
+  const isCustomer = kind === "customer"
+
+  const [name, setName] = useState("")
+  const [phone, setPhone] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+
+  const submit = async () => {
+    setError("")
+    if (!name.trim()) { setError("الاسم مطلوب"); return }
+    setBusy(true)
+    try {
+      const party = await addPartyAction({ name: name.trim(), kind, phone: phone.trim() })
+      notify(`تمت إضافة ${isCustomer ? "الزبون" : "المورد"} ${party.name}`)
+      await onCreated(party.id)
+    } catch (e) {
+      setError(describeError(e, "تعذّرت الإضافة"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={isCustomer ? "زبون جديد" : "مورد جديد"}
+      description="يُضاف مباشرة إلى القائمة ويُختار في هذه الفاتورة"
+      footer={
+        <>
+          <Btn variant="ghost" onClick={onClose}>إلغاء</Btn>
+          <Btn onClick={submit} loading={busy}>إضافة واختيار</Btn>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <Field label="الاسم" required>
+          <TextInput
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={isCustomer ? "محمود العجولي" : "شركة الألمنيوم"}
+            autoFocus
+            onKeyDown={(e) => { if (e.key === "Enter") submit() }}
+          />
+        </Field>
+
+        <Field label="رقم الهاتف" hint="اختياري">
+          <TextInput
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            dir="ltr" className="text-left num"
+            placeholder="0599000000"
+            onKeyDown={(e) => { if (e.key === "Enter") submit() }}
+          />
+        </Field>
+
+        <InfoNote>
+          باقي التفاصيل — السقف الائتماني ومهلة السداد والعنوان — يمكنك
+          إكمالها لاحقاً من شاشة {isCustomer ? "الزبائن" : "الموردون"}.
+        </InfoNote>
+
+        {error && <InlineError message={error} />}
+      </div>
+    </Modal>
   )
 }
 

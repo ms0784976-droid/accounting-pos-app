@@ -5,6 +5,7 @@
 // ================================================================
 
 import { cn } from "@/lib/utils"
+import { exportToExcel as exportXlsx, inferColumns } from "@/lib/xlsx"
 import { useState, useEffect, useCallback, createContext, useContext, type ReactNode } from "react"
 import { X, Search, Check, AlertTriangle, Info, Loader2, ChevronDown, Inbox } from "lucide-react"
 import { CURRENCY_MAP } from "@/lib/constants"
@@ -784,15 +785,32 @@ export function downloadFile(filename: string, content: string, mime = "applicat
   URL.revokeObjectURL(url)
 }
 
-/** تصدير جدول إلى CSV يفتح في Excel بالعربي بلا تشويش */
-export function exportToCsv(filename: string, headers: string[], rows: (string | number)[][]) {
-  const esc = (v: string | number) => {
-    const s = String(v ?? "")
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-  }
-  const csv = [headers.map(esc).join(","), ...rows.map((r) => r.map(esc).join(","))].join("\n")
-  downloadFile(filename, csv, "text/csv")
+/**
+ * تصدير جدول إلى ملف Excel حقيقي (.xlsx).
+ *
+ * كان هذا يُخرج CSV، وExcel يخمّن نوع كل خانة عند الفتح فيُفسد البيانات:
+ * كود "007" يصير 7، والباركود يصير ترميزاً علمياً، وخانة تبدأ بـ = تُنفَّذ
+ * كمعادلة. الآن كل خانة تحمل نوعها صراحةً فلا يتغيّر حرف واحد.
+ *
+ * الاسم بقي exportToCsv حفاظاً على كل مواضع الاستدعاء القائمة،
+ * ويُصدَّر كذلك باسم exportToExcel للكود الجديد.
+ */
+export function exportToExcel(
+  filename: string,
+  headers: string[],
+  rows: (string | number)[][],
+  options?: { sheetName?: string; title?: string; subtitle?: string }
+) {
+  exportXlsx(filename, {
+    name: options?.sheetName ?? "البيانات",
+    title: options?.title,
+    subtitle: options?.subtitle,
+    columns: inferColumns(headers, rows),
+    rows,
+  })
 }
+
+export const exportToCsv = exportToExcel
 
 /** يطبع منطقة محددة فقط */
 export function printArea() {
