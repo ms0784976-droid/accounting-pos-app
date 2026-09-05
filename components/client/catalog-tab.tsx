@@ -24,7 +24,7 @@ import { UNITS } from "@/lib/units"
 import { PRODUCT_TYPE_META } from "@/lib/constants"
 import type { Product, ProductType, UnitCode } from "@/lib/types"
 import {
-  Plus, Pencil, Package, Tags, Download, PackageX, EyeOff, Coins,
+  Plus, Pencil, Package, Tags, Download, PackageX, EyeOff, Coins, ChevronDown,
 } from "lucide-react"
 import { describeError } from "@/lib/errors"
 
@@ -288,6 +288,11 @@ function ProductForm({ product, onClose, onSaved }: {
   const [adjust, setAdjust] = useState({ qty: "", date: todayIn(tz), note: "" })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
+  /** الخيارات المتقدمة مطوية افتراضياً — تُفتح تلقائياً عند التعديل
+      إذا كان الصنف يحمل قيماً فيها، حتى لا تختفي عن المستخدم */
+  const [showAdvanced, setShowAdvanced] = useState<boolean>(
+    () => !!product && !!(product.barcode || product.sku || product.categoryId || product.minQty)
+  )
 
   /** الفرق بين الرصيد الفعلي المُدخل والرصيد الدفتري — null إذا لم يُدخل شيء */
   const adjustDiff = useMemo(() => {
@@ -381,12 +386,82 @@ function ProductForm({ product, onClose, onSaved }: {
       }
     >
       <div className="space-y-4">
+        {/* ══ الأساسي — أربعة حقول فقط ══
+            كانت الشاشة تعرض عشرين حقلاً دفعة واحدة، فيتوقّف من يُدخل
+            صنفه الأول لا يدري أيّها مطلوب. الظاهر الآن هو ما يلزم
+            فعلاً: الاسم، سعر البيع، سعر التكلفة، والكمية الحالية.
+            الباقي كما هو بالضبط لكن تحت "خيارات متقدمة" — لم يُحذف
+            حقل واحد ولم يتغيّر أي حساب. */}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="اسم الصنف" required>
             <TextInput value={form.name} onChange={(e) => set("name", e.target.value)}
-                       placeholder="رز بسمتي 5 كغم" />
+                       placeholder="رز بسمتي 5 كغم" autoFocus />
           </Field>
 
+          <Field label="سعر البيع">
+            <NumberInput value={form.lastPrice}
+                         onChange={(e) => set("lastPrice", e.target.value)}
+                         min={0} step="0.01" />
+          </Field>
+
+          <Field
+            label="سعر التكلفة"
+            hint={
+              product && !can("editCosts")
+                ? "تحتاج صلاحية أعلى"
+                : Number(form.lastCost) > 0
+                  ? `الربح ${margin.toFixed(2)} (${marginPct.toFixed(0)}%)`
+                  : "يُحدَّث تلقائياً من المشتريات"
+            }
+          >
+            <NumberInput
+              value={form.lastCost}
+              onChange={(e) => set("lastCost", e.target.value)}
+              min={0} step="0.01"
+              disabled={!!product && !can("editCosts")}
+            />
+          </Field>
+
+          {tracks && !product && (
+            <Field label="الكمية الموجودة عندك الآن"
+                   hint="اتركها فارغة إذا كان الصنف جديداً ولم يصل بعد">
+              <NumberInput value={opening.qty}
+                           onChange={(e) => setOpening((o) => ({ ...o, qty: e.target.value }))}
+                           min={0} step="0.001" placeholder="0" />
+            </Field>
+          )}
+
+          {tracks && product && (
+            <Field label="الرصيد الحالي">
+              <div className="h-9 flex items-center px-3 rounded-lg bg-muted text-sm num">
+                {formatQty(product.stockQty)}
+                <span className="text-xs text-muted-foreground mr-2">
+                  بتكلفة {product.avgCost.toFixed(4)}
+                </span>
+              </div>
+            </Field>
+          )}
+        </div>
+
+        {/* ══ خيارات متقدمة — مطوية افتراضياً ══ */}
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          aria-expanded={showAdvanced}
+          className="flex w-full items-center gap-2 rounded-lg border border-border
+                     px-3.5 py-2.5 text-right text-sm font-medium text-foreground/85
+                     transition hover:border-border-strong hover:bg-muted/50"
+        >
+          <ChevronDown className={`size-4 shrink-0 transition-transform ${showAdvanced ? "" : "-rotate-90"}`} />
+          خيارات متقدمة
+          <span className="mr-auto text-[11px] font-normal text-muted-foreground">
+            الباركود · الوحدة · التصنيف · الضريبة · الحد الأدنى
+          </span>
+        </button>
+
+        {showAdvanced && (
+        <div className="space-y-4">
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field label="نوع الصنف" required hint={PRODUCT_TYPE_META[form.type].hint}>
             <SelectInput value={form.type}
                          onChange={(e) => set("type", e.target.value as ProductType)}>
@@ -424,43 +499,6 @@ function ProductForm({ product, onClose, onSaved }: {
               ))}
             </SelectInput>
           </Field>
-        </div>
-
-        {/* ── الأسعار ── */}
-        <div className="rounded-xl border border-border p-4 space-y-3">
-          <h3 className="text-xs font-medium text-muted-foreground">الأسعار</h3>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Field
-              label="سعر التكلفة"
-              hint={product && !can("editCosts") ? "تحتاج صلاحية أعلى" : "يُحدَّث تلقائياً من المشتريات"}
-            >
-              <NumberInput
-                value={form.lastCost}
-                onChange={(e) => set("lastCost", e.target.value)}
-                min={0} step="0.01"
-                disabled={!!product && !can("editCosts")}
-              />
-            </Field>
-            <Field label="سعر البيع">
-              <NumberInput value={form.lastPrice}
-                           onChange={(e) => set("lastPrice", e.target.value)}
-                           min={0} step="0.01" />
-            </Field>
-            <Field label="هامش الربح">
-              <div className="h-9 flex items-center px-3 rounded-lg bg-muted text-sm">
-                {Number(form.lastCost) > 0 ? (
-                  <span className={margin >= 0 ? "text-success" : "text-danger"}>
-                    <span className="num">{margin.toFixed(2)}</span>
-                    <span className="text-xs mr-1.5 opacity-75 num">
-                      ({marginPct.toFixed(0)}%)
-                    </span>
-                  </span>
-                ) : (
-                  <span className="text-muted-foreground text-xs">—</span>
-                )}
-              </div>
-            </Field>
-          </div>
 
           {company?.vatEnabled && (
             <Field label="نسبة الضريبة الخاصة بالصنف"
@@ -485,16 +523,6 @@ function ProductForm({ product, onClose, onSaved }: {
                              min={0} step="0.001" placeholder="0" />
               </Field>
 
-              {product && (
-                <Field label="الرصيد الحالي">
-                  <div className="h-9 flex items-center px-3 rounded-lg bg-muted text-sm num">
-                    {formatQty(product.stockQty)}
-                    <span className="text-xs text-muted-foreground mr-2">
-                      بتكلفة {product.avgCost.toFixed(4)}
-                    </span>
-                  </div>
-                </Field>
-              )}
             </div>
 
             <label className="flex items-center gap-2.5 text-sm cursor-pointer">
@@ -514,12 +542,7 @@ function ProductForm({ product, onClose, onSaved }: {
                   الرصيد الافتتاحي يسجّل الكمية الموجودة فعلاً قبل استخدام البرنامج،
                   كقيد محاسبي — لا كفاتورة شراء وهمية.
                 </InfoNote>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <Field label="الكمية الافتتاحية">
-                    <NumberInput value={opening.qty}
-                                 onChange={(e) => setOpening((o) => ({ ...o, qty: e.target.value }))}
-                                 min={0} step="0.001" placeholder="0" />
-                  </Field>
+                <div className="grid gap-3 sm:grid-cols-2">
                   <Field label="تكلفة الوحدة">
                     <NumberInput value={opening.cost}
                                  onChange={(e) => setOpening((o) => ({ ...o, cost: e.target.value }))}
@@ -582,6 +605,8 @@ function ProductForm({ product, onClose, onSaved }: {
           <TextArea value={form.notes} onChange={(e) => set("notes", e.target.value)}
                     className="min-h-16" />
         </Field>
+        </div>
+        )}
 
         {product && (
           <label className="flex items-center gap-2.5 text-sm cursor-pointer">

@@ -9,11 +9,7 @@
 
 import { useMemo } from "react"
 import { useSession, useAsyncData, resolvePreset } from "@/lib/session"
-import {
-  fetchDashboardAction, fetchLowStockAction, fetchSalesTrendAction, fetchTopProductsAction,
-} from "@/app/actions/reports"
-import { fetchInvoicesAction } from "@/app/actions/invoices"
-import { fetchCashAccountsAction } from "@/app/actions/treasury"
+import { fetchHomeBundleAction } from "@/app/actions/bundles"
 import {
   PageHeader, StatCard, SectionCard, DataTable, Th, Td, Tr, Money, Badge,
   EmptyState, TableSkeleton, InlineError, formatDate, formatQty, Btn,
@@ -22,7 +18,7 @@ import { INVOICE_STATUS_META, PAYMENT_METHOD_META } from "@/lib/constants"
 import type { TabId } from "@/lib/constants"
 import {
   Wallet, TrendingUp, ArrowDownLeft, ArrowUpRight, Boxes,
-  AlertTriangle, Plus, PackageX,
+  AlertTriangle, Plus, PackageX, ShoppingCart, Receipt, TrendingDown,
 } from "lucide-react"
 
 export function OverviewTab({ onNavigate }: { onNavigate: (tab: TabId) => void }) {
@@ -30,36 +26,45 @@ export function OverviewTab({ onNavigate }: { onNavigate: (tab: TabId) => void }
   const tz = company?.timezone ?? "Asia/Hebron"
   const month = useMemo(() => resolvePreset("this-month", tz), [tz])
 
-  const dash = useAsyncData(() => fetchDashboardAction(), [])
-  const low = useAsyncData(() => fetchLowStockAction(), [])
-  const cash = useAsyncData(() => fetchCashAccountsAction(), [])
-  const recent = useAsyncData(
-    () => fetchInvoicesAction({ type: "sale", limit: 6 }), []
-  )
-  const trend = useAsyncData(
-    () => (can("viewReports") ? fetchSalesTrendAction(month.from, month.to, "day") : Promise.resolve([])),
-    [month.from, month.to]
-  )
-  const top = useAsyncData(
-    () => (can("viewReports") ? fetchTopProductsAction(month.from, month.to, 5) : Promise.resolve([])),
+  /* ⚡ كانت ستة استدعاءات منفصلة للسيرفر — صارت استدعاءً واحداً.
+     نفس البيانات بالضبط، لكن برحلة شبكة واحدة وفحص جلسة واحد. */
+  const home = useAsyncData(
+    () => fetchHomeBundleAction(month.from, month.to),
     [month.from, month.to]
   )
 
-  const d = dash.data
+  const d = home.data?.dashboard ?? null
+  const lowStock = home.data?.lowStock ?? []
+  const cashAccounts = home.data?.cashAccounts ?? []
+  const recentInvoices = home.data?.recentInvoices ?? []
+  const trendData = home.data?.trend ?? []
+  const topProducts = home.data?.topProducts ?? []
+  const busy = home.loading
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="الرئيسية"
         subtitle={d ? `${formatDate(d.today)} — ملخص ${company?.name ?? ""}` : "جارٍ التحميل…"}
-        actions={
-          can("createSale") && (
-            <Btn icon={Plus} onClick={() => onNavigate("sales")}>فاتورة جديدة</Btn>
-          )
-        }
       />
 
-      {dash.error && <InlineError message={dash.error} />}
+      {home.error && <InlineError message={home.error} />}
+
+      {/* ── أزرار الشغل اليومي — أكبر ثلاث عمليات بضغطة واحدة ── */}
+      <div className="grid gap-3 sm:grid-cols-3">
+        {can("createSale") && (
+          <QuickAction icon={ShoppingCart} label="بيع" hint="فاتورة جديدة للزبون"
+                       primary onClick={() => onNavigate("sales")} />
+        )}
+        {can("managePayments") && (
+          <QuickAction icon={Receipt} label="قبض من زبون" hint="تسجيل دفعة واردة"
+                       onClick={() => onNavigate("vouchers")} />
+        )}
+        {can("manageExpenses") && (
+          <QuickAction icon={TrendingDown} label="صرف مصروف" hint="كهرباء، أجرة، نقل…"
+                       onClick={() => onNavigate("expenses")} />
+        )}
+      </div>
 
       {/* ── المؤشرات ── */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
@@ -138,9 +143,9 @@ export function OverviewTab({ onNavigate }: { onNavigate: (tab: TabId) => void }
             </button>
           }
         >
-          {recent.loading ? (
+          {busy ? (
             <TableSkeleton rows={4} cols={5} />
-          ) : !recent.data?.length ? (
+          ) : !recentInvoices.length ? (
             <EmptyState
               message="لا توجد فواتير بعد"
               hint="ابدأ بتسجيل أول عملية بيع"
@@ -158,7 +163,7 @@ export function OverviewTab({ onNavigate }: { onNavigate: (tab: TabId) => void }
                 </tr>
               </thead>
               <tbody>
-                {recent.data.map((inv) => (
+                {recentInvoices.map((inv) => (
                   <Tr key={inv.id} muted={inv.status === "cancelled"}>
                     <Td mono className="text-xs text-muted-foreground">{inv.invoiceNo}</Td>
                     <Td>
@@ -188,14 +193,14 @@ export function OverviewTab({ onNavigate }: { onNavigate: (tab: TabId) => void }
 
         {/* ── تنبيهات ورصيد ── */}
         <div className="space-y-4">
-          {!!low.data?.length && (
+          {!!lowStock.length && (
             <div className="surface border-warning/40 bg-warning/5 p-4">
               <div className="flex items-center gap-2 mb-3">
                 <AlertTriangle className="size-4 text-warning" />
                 <h3 className="text-sm font-semibold text-foreground">مخزون تحت الحد الأدنى</h3>
               </div>
               <ul className="space-y-1.5">
-                {low.data.slice(0, 5).map((item) => (
+                {lowStock.slice(0, 5).map((item) => (
                   <li key={item.productId} className="flex items-center justify-between gap-2 text-xs">
                     <span className="truncate text-foreground/85">{item.name}</span>
                     <span className="num shrink-0 text-warning font-medium">
@@ -204,25 +209,25 @@ export function OverviewTab({ onNavigate }: { onNavigate: (tab: TabId) => void }
                   </li>
                 ))}
               </ul>
-              {low.data.length > 5 && (
+              {lowStock.length > 5 && (
                 <button
                   onClick={() => onNavigate("inventory")}
                   className="mt-3 text-xs text-primary hover:underline"
                 >
-                  و {low.data.length - 5} صنف آخر
+                  و {lowStock.length - 5} صنف آخر
                 </button>
               )}
             </div>
           )}
 
           <SectionCard title="أرصدة الصناديق" padded>
-            {cash.loading ? (
+            {busy ? (
               <div className="skeleton h-20 rounded-lg" />
-            ) : !cash.data?.length ? (
+            ) : !cashAccounts.length ? (
               <p className="text-xs text-muted-foreground">لا توجد صناديق</p>
             ) : (
               <div className="space-y-2">
-                {cash.data.filter((c) => c.isActive).map((acc) => (
+                {cashAccounts.filter((c) => c.isActive).map((acc) => (
                   <div key={acc.id} className="flex items-center justify-between gap-2 text-sm">
                     <span className="text-muted-foreground truncate">{acc.name}</span>
                     <Money value={acc.balance} currency={currency} />
@@ -232,7 +237,7 @@ export function OverviewTab({ onNavigate }: { onNavigate: (tab: TabId) => void }
                                 border-t border-border-strong text-sm">
                   <span className="font-semibold text-foreground">الإجمالي</span>
                   <Money
-                    value={cash.data.reduce((s, a) => s + a.balance, 0)}
+                    value={cashAccounts.reduce((s, a) => s + a.balance, 0)}
                     currency={currency} bold colored
                   />
                 </div>
@@ -248,9 +253,9 @@ export function OverviewTab({ onNavigate }: { onNavigate: (tab: TabId) => void }
           title="أكثر الأصناف مبيعاً هذا الشهر"
           description="الربح محسوب بالتكلفة المرجّحة وقت البيع"
         >
-          {top.loading ? (
+          {busy ? (
             <TableSkeleton rows={4} cols={5} />
-          ) : !top.data?.length ? (
+          ) : !topProducts.length ? (
             <EmptyState message="لا توجد مبيعات هذا الشهر" />
           ) : (
             <DataTable>
@@ -264,7 +269,7 @@ export function OverviewTab({ onNavigate }: { onNavigate: (tab: TabId) => void }
                 </tr>
               </thead>
               <tbody>
-                {top.data.map((p) => (
+                {topProducts.map((p) => (
                   <Tr key={p.productId ?? p.itemName}>
                     <Td>
                       <div className="font-medium">{p.itemName}</div>
@@ -285,12 +290,55 @@ export function OverviewTab({ onNavigate }: { onNavigate: (tab: TabId) => void }
       )}
 
       {/* ── اتجاه المبيعات ── */}
-      {can("viewReports") && !!trend.data?.length && (
+      {can("viewReports") && !!trendData.length && (
         <SectionCard title="حركة المبيعات اليومية" padded>
-          <SalesSparkline data={trend.data} currency={currency} />
+          <SalesSparkline data={trendData} currency={currency} />
         </SectionCard>
       )}
     </div>
+  )
+}
+
+/* ── زر عملية سريعة ──────────────────────────────────────────── */
+/**
+ * الهدف: من يفتح البرنامج لأول مرة يجد أكبر ثلاث عمليات أمامه
+ * مباشرةً بأسماء يفهمها — "بيع"، "قبض من زبون"، "صرف مصروف" —
+ * بدل أن يبحث عنها في قائمة من ستة عشر تبويباً.
+ */
+function QuickAction({ icon: Icon, label, hint, primary, onClick }: {
+  icon: React.ElementType
+  label: string
+  hint: string
+  primary?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={
+        "group flex items-center gap-3 rounded-xl px-4 py-3.5 text-right transition " +
+        "hover:-translate-y-px active:translate-y-0 " +
+        (primary
+          ? "bg-primary text-primary-foreground shadow-sm hover:shadow-md"
+          : "surface hover:border-border-strong")
+      }
+    >
+      <span
+        className={
+          "flex size-9 shrink-0 items-center justify-center rounded-lg " +
+          (primary ? "bg-primary-foreground/15" : "bg-muted")
+        }
+      >
+        <Icon className="size-[18px]" />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[15px] font-semibold leading-tight">{label}</span>
+        <span className={"block text-[11.5px] leading-tight mt-0.5 " +
+                         (primary ? "text-primary-foreground/70" : "text-muted-foreground")}>
+          {hint}
+        </span>
+      </span>
+    </button>
   )
 }
 

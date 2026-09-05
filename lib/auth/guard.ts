@@ -9,6 +9,7 @@ import "server-only"
  * كل دالة تلمس بيانات شركة يجب أن تمرّ من هنا أولاً.
  */
 
+import { cache } from "react"
 import { createServerSupabase, createServiceClient } from "@/lib/supabase/server"
 import type { ClientRole } from "@/lib/types"
 
@@ -20,68 +21,69 @@ export type Session = {
   role: ClientRole | null
 }
 
-/** يقرأ الجلسة الموثوقة من الكوكيز — لا يقبل أي مُدخل من العميل */
-export async function getSession(): Promise<Session | null> {
+/**
+ * يقرأ الجلسة الموثوقة من الكوكيز — لا يقبل أي مُدخل من العميل.
+ *
+ * ⚡ تسريع بلا أي تغيير في المنطق أو الأمان:
+ *
+ * 1) كانت تنفّذ 4 رحلات شبكة *متتابعة*، كل واحدة تنتظر السابقة:
+ *      getUser() → profiles → tenants → tenant_users
+ *    صارت رحلتين: getUser() ثم الثلاثة الباقية معاً بـ Promise.all.
+ *    آمن تماماً لأن الاستعلامات الثلاثة كلها تعتمد على user.id فقط،
+ *    ولا يعتمد أيٌّ منها على نتيجة الآخر.
+ *
+ * 2) ترتيب الأولوية محفوظ حرفياً كما كان: مشرف المنصة أولاً، ثم
+ *    صاحب الشركة، ثم الموظف — نقرأ الثلاثة معاً ونقرّر بعدها.
+ *
+ * 3) cache() من React تمنع تكرار الفحص داخل الطلب الواحد: أي عدد من
+ *    استدعاءات requireTenant/requirePermission في نفس الطلب تنفّذه مرة.
+ */
+export const getSession = cache(async function getSession(): Promise<Session | null> {
   const supabase = await createServerSupabase()
   const { data, error } = await supabase.auth.getUser()
   if (error || !data.user) return null
 
+  const userId = data.user.id
+  const email = data.user.email ?? ""
   const admin = createServiceClient()
-  const { data: profile } = await admin
-    .from("profiles")
-    .select("system_role")
-    .eq("id", data.user.id)
-    .single()
 
-  const systemRole = (profile?.system_role as "owner" | "client") ?? "client"
+  const [profileRes, ownTenantRes, memberRes] = await Promise.all([
+    admin.from("profiles").select("system_role").eq("id", userId).maybeSingle(),
+    admin.from("tenants").select("id, status").eq("auth_user_id", userId).maybeSingle(),
+    admin
+      .from("tenant_users")
+      .select("tenant_id, role, status, tenants(status)")
+      .eq("auth_user_id", userId)
+      .maybeSingle(),
+  ])
+
+  const systemRole = (profileRes.data?.system_role as "owner" | "client") ?? "client"
 
   if (systemRole === "owner") {
-    return {
-      userId: data.user.id,
-      email: data.user.email ?? "",
-      systemRole: "owner",
-      tenantId: null,
-      role: null,
-    }
+    return { userId, email, systemRole: "owner", tenantId: null, role: null }
   }
 
   // صاحب الشركة نفسه
-  const { data: ownTenant } = await admin
-    .from("tenants")
-    .select("id, status")
-    .eq("auth_user_id", data.user.id)
-    .maybeSingle()
-
+  const ownTenant = ownTenantRes.data
   if (ownTenant) {
     if (ownTenant.status === "frozen") return null
-    return {
-      userId: data.user.id,
-      email: data.user.email ?? "",
-      systemRole: "client",
-      tenantId: ownTenant.id,
-      role: "admin",
-    }
+    return { userId, email, systemRole: "client", tenantId: ownTenant.id, role: "admin" }
   }
 
   // موظف داخل شركة
-  const { data: member } = await admin
-    .from("tenant_users")
-    .select("tenant_id, role, status, tenants(status)")
-    .eq("auth_user_id", data.user.id)
-    .maybeSingle()
-
+  const member = memberRes.data
   if (!member) return null
   const tenantStatus = (member as unknown as { tenants?: { status?: string } }).tenants?.status
   if (member.status !== "active" || tenantStatus === "frozen") return null
 
   return {
-    userId: data.user.id,
-    email: data.user.email ?? "",
+    userId,
+    email,
     systemRole: "client",
     tenantId: member.tenant_id as string,
     role: member.role as ClientRole,
   }
-}
+})
 
 /** يتطلب جلسة صالحة */
 export async function requireSession(): Promise<Session> {

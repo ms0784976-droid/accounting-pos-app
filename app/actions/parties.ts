@@ -163,29 +163,95 @@ export async function updatePartyAction(
 }
 
 /**
- * لا نحذف جهة تعامل لها حركة — نعطّلها.
- * حذفها فعلياً يكسر تاريخ الحسابات ويجعل القيود بلا طرف.
+ * حذف جهة تعامل — بمنطق يفهم الفواتير الملغاة.
+ *
+ * 🐞 الخلل الذي كان موجوداً:
+ * كانت الدالة تعدّ صفوف journal_lines المرتبطة بالجهة. لكن إلغاء
+ * الفاتورة لا يحذف قيدها بل يضيف قيداً عكسياً — فتصير الفاتورة
+ * الملغاة الواحدة صفّين لا صفراً. النتيجة: زبون كل فواتيره ملغاة
+ * يبقى "عنده حركة" فلا يُحذف أبداً، ويُعطَّل بصمت بلا أي تفسير.
+ *
+ * ✅ الآن نقيس الأثر الفعلي لا عدد الصفوف:
+ *      • فواتير غير ملغاة
+ *      • سندات غير ملغاة
+ *      • رصيد افتتاحي غير صفري
+ *      • رصيد حالي غير صفري
+ *    إن كانت كلها صفراً فلا أثر محاسبياً للجهة → حذف كامل آمن.
+ *    وإلا → أرشفة كما كان، لكن مع سبب مفصّل يُعرض للمستخدم.
+ *
+ * ⚠️ لا يقع حذف إلا إذا كان صافي الأثر صفراً فعلاً، فميزان المراجعة
+ *    لا يتأثر في أي حالة.
  */
-export async function deletePartyAction(id: string): Promise<{ deactivated: boolean }> {
+export interface DeletePartyResult {
+  deactivated: boolean
+  /** سبب الأرشفة بدل الحذف — فارغ عند الحذف الكامل */
+  reason: string
+  liveInvoices: number
+  liveVouchers: number
+  balance: number
+}
+
+export async function deletePartyAction(id: string): Promise<DeletePartyResult> {
   const s = await requireTenant()
   const supabase = await createServerSupabase()
 
-  const { count } = await supabase
-    .from("journal_lines").select("id", { count: "exact", head: true })
-    .eq("party_id", id).eq("tenant_id", s.tenantId)
+  const [invRes, vchRes, partyRes, balRes] = await Promise.all([
+    supabase
+      .from("invoices").select("id", { count: "exact", head: true })
+      .eq("party_id", id).eq("tenant_id", s.tenantId).neq("status", "cancelled"),
+    supabase
+      .from("payments").select("id", { count: "exact", head: true })
+      .eq("party_id", id).eq("tenant_id", s.tenantId).neq("status", "cancelled"),
+    supabase
+      .from("parties").select("name, opening_balance")
+      .eq("id", id).eq("tenant_id", s.tenantId).maybeSingle(),
+    supabase
+      .from("v_party_balances").select("balance").eq("party_id", id).maybeSingle(),
+  ])
 
-  if ((count ?? 0) > 0) {
+  if (!partyRes.data) throw new Error("جهة التعامل غير موجودة")
+
+  const liveInvoices = invRes.count ?? 0
+  const liveVouchers = vchRes.count ?? 0
+  const openingBalance = Number(partyRes.data.opening_balance ?? 0)
+  const balance = Number(balRes.data?.balance ?? 0)
+
+  const hasMovement =
+    liveInvoices > 0 ||
+    liveVouchers > 0 ||
+    Math.abs(openingBalance) > 0.009 ||
+    Math.abs(balance) > 0.009
+
+  if (hasMovement) {
+    const bits: string[] = []
+    if (liveInvoices > 0) bits.push(`${liveInvoices} فاتورة سارية`)
+    if (liveVouchers > 0) bits.push(`${liveVouchers} سند سارٍ`)
+    if (Math.abs(openingBalance) > 0.009) bits.push("رصيد افتتاحي مسجّل")
+    if (Math.abs(balance) > 0.009) bits.push(`رصيد ${balance.toFixed(2)}`)
+
     const { error } = await supabase
       .from("parties").update({ is_active: false })
       .eq("id", id).eq("tenant_id", s.tenantId)
     if (error) throw new Error(error.message)
-    return { deactivated: true }
+
+    return {
+      deactivated: true,
+      reason:
+        `"${partyRes.data.name}" عليه ${bits.join(" و")}. ` +
+        `الحذف النهائي كان سيُخلّ بميزان المراجعة، فنُقل إلى الأرشيف: ` +
+        `اختفى من القوائم والفواتير الجديدة، وبقي في السجل والتقارير القديمة.`,
+      liveInvoices,
+      liveVouchers,
+      balance,
+    }
   }
 
+  // لا أثر محاسبياً — حذف كامل آمن
   const { error } = await supabase
     .from("parties").delete().eq("id", id).eq("tenant_id", s.tenantId)
   if (error) throw new Error(error.message)
-  return { deactivated: false }
+
+  return { deactivated: false, reason: "", liveInvoices: 0, liveVouchers: 0, balance: 0 }
 }
 
 /** تعديل الرصيد الافتتاحي — يعكس القيد القديم ويسجّل واحداً جديداً */

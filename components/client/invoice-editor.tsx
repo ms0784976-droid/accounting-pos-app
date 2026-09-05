@@ -13,9 +13,10 @@
 import { useState, useMemo, useEffect, useRef } from "react"
 import { useSession, useAsyncData, todayIn } from "@/lib/session"
 import { createInvoiceAction } from "@/app/actions/invoices"
-import { fetchProductsFullAction, findProductByBarcodeAction } from "@/app/actions/inventory"
-import { fetchPartiesAction, addPartyAction } from "@/app/actions/parties"
-import { fetchCashAccountsAction, createVoucherAction } from "@/app/actions/treasury"
+import { findProductByBarcodeAction } from "@/app/actions/inventory"
+import { addPartyAction } from "@/app/actions/parties"
+import { createVoucherAction } from "@/app/actions/treasury"
+import { fetchInvoiceEditorBundleAction } from "@/app/actions/bundles"
 import {
   SectionCard, DataTable, Th, Td, Money, Field, TextInput, NumberInput,
   SelectInput, TextArea, Btn, IconBtn, InlineError, InfoNote, EmptyState,
@@ -66,11 +67,18 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
   const isSale = type === "sale" || type === "sale_return"
   const defaultTax = company?.vatEnabled ? company.vatRate : 0
 
-  const products = useAsyncData(() => fetchProductsFullAction({ activeOnly: true }), [])
-  const parties = useAsyncData(
-    () => fetchPartiesAction(isSale ? "customer" : "supplier"), [isSale]
-  )
-  const cash = useAsyncData(() => fetchCashAccountsAction(), [])
+  /* ⚡ كانت ثلاثة استدعاءات منفصلة (الأصناف، الجهات، الصناديق).
+     صارت استدعاءً واحداً — الفاتورة تفتح أسرع بثلاث مرات تقريباً. */
+  const bundle = useAsyncData(() => fetchInvoiceEditorBundleAction(isSale), [isSale])
+  const products = {
+    data: bundle.data?.products ?? null,
+    loading: bundle.loading,
+  }
+  const parties = {
+    data: bundle.data?.parties ?? null,
+    reload: bundle.reload,
+  }
+  const cash = { data: bundle.data?.cashAccounts ?? null }
 
   const [partyId, setPartyId] = useState("")
   const [date, setDate] = useState(todayIn(tz))
@@ -99,6 +107,32 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
       setDueDate(d.toISOString().split("T")[0])
     }
   }, [method, selectedParty, date])
+
+  /* ── فتح منتقي الأصناف تلقائياً عند بدء فاتورة فارغة ──
+     البائع لا يحتاج ضغطة إضافية: الفاتورة تفتح ومؤشر الكتابة جاهز
+     داخل خانة البحث/الباركود مباشرة. */
+  const autoOpened = useRef(false)
+  useEffect(() => {
+    if (autoOpened.current) return
+    if (products.loading) return
+    autoOpened.current = true
+    if (!lines.length) setPicker(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products.loading])
+
+  /* ── اختصارات لوحة المفاتيح ──
+     F2 يحفظ · Esc يغلق · Ctrl+Enter يحفظ أيضاً (للوحات بلا F2) */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "F2" || (e.key === "Enter" && (e.ctrlKey || e.metaKey))) {
+        e.preventDefault()
+        if (!busy && lines.length) void save()
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, lines, partyId, date, dueDate, method, cashId, reference, notes, paidNow])
 
   /* ── إدارة الأسطر ── */
 
@@ -580,6 +614,8 @@ export function InvoiceEditor({ type, onSaved, onCancel }: {
           </div>
 
           <p className="text-[11px] text-muted-foreground mt-2.5 leading-relaxed">
+            اضغط <kbd className="rounded border border-border bg-muted px-1 py-px font-sans text-[10px]">F2</kbd>
+            {" "}للحفظ بلا ماوس.
             الحفظ يحرّك المخزون وينشئ القيد المحاسبي معاً. لا يمكن تعديل الفاتورة بعد
             التأكيد — يمكن إلغاؤها بقيد عكسي أو إنشاء مرتجع.
           </p>

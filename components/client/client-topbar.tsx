@@ -12,39 +12,70 @@ import { cn } from "@/lib/utils"
 import { useSession } from "@/lib/session"
 import { TAB_LABELS, type TabId } from "@/lib/constants"
 import { Btn, IconBtn } from "./ui"
-import { LogOut, Moon, Sun, Lock, AlertTriangle } from "lucide-react"
+import { GlobalSearch } from "./global-search"
+import { LogOut, Moon, Sun, Lock, AlertTriangle, Menu } from "lucide-react"
 
-export function ClientTopbar({ active, onLogout, onNavigate }: {
+/** مفتاح حفظ السمة — نفس المفتاح الذي يقرأه السكربت في app/layout.tsx */
+const THEME_KEY = "mohaseb-theme"
+
+export function ClientTopbar({ active, onLogout, onNavigate, onOpenMenu }: {
   active: TabId
   onLogout: () => void
   onNavigate: (tab: TabId) => void
+  /** فتح القائمة الجانبية — على الهاتف */
+  onOpenMenu: () => void
 }) {
   const { user, company } = useSession()
   const [dark, setDark] = useState(false)
 
   useEffect(() => {
-    const saved = document.documentElement.classList.contains("dark")
-    setDark(saved)
+    setDark(document.documentElement.classList.contains("dark"))
   }, [])
 
+  /**
+   * 🐞 كان الوضع الليلي يُنسى: التبديل يغيّر الـ class على <html> بلا
+   * حفظه في أي مكان، فأي تحديث للصفحة يعيدك للوضع الفاتح.
+   * الآن يُحفظ في المتصفح ويُقرأ في layout.tsx قبل أول رسم، فلا
+   * ترمش الشاشة بالأبيض عند التحميل.
+   */
   const toggleTheme = () => {
     const next = !dark
     document.documentElement.classList.toggle("dark", next)
     setDark(next)
+    try {
+      window.localStorage.setItem(THEME_KEY, next ? "dark" : "light")
+    } catch {
+      // التصفح الخاص قد يمنع الكتابة — التبديل يبقى شغّالاً لهذه الجلسة
+    }
   }
 
   const expiringSoon = daysUntil(company?.expiresAt) !== null && daysUntil(company?.expiresAt)! <= 14
 
   return (
     <header className="no-print sticky top-0 z-30 bg-canvas/85 backdrop-blur border-b border-border">
-      <div className="flex items-center justify-between gap-4 px-6 h-14">
-        <div className="min-w-0">
+      <div className="flex items-center justify-between gap-3 px-3 sm:px-6 h-14">
+        <div className="flex min-w-0 items-center gap-2">
+          {/* زر القائمة — يظهر على الهاتف فقط، وعلى الكمبيوتر القائمة ثابتة */}
+          <button
+            onClick={onOpenMenu}
+            aria-label="فتح القائمة"
+            className="lg:hidden -mr-1 flex size-9 shrink-0 items-center justify-center
+                       rounded-lg text-foreground/75 transition hover:bg-muted"
+          >
+            <Menu className="size-5" />
+          </button>
+
           <h1 className="text-[15px] font-semibold text-foreground truncate">
             {TAB_LABELS[active]}
           </h1>
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {/* بحث شامل جديد — Ctrl+K من أي شاشة */}
+          <GlobalSearch onNavigate={onNavigate} />
+
+          <div className="mx-1 hidden h-6 w-px bg-border sm:block" />
+
           {company?.lockedUntil && (
             <span
               title={`الفترة مقفلة حتى ${company.lockedUntil} — لا يمكن التسجيل قبل هذا التاريخ`}

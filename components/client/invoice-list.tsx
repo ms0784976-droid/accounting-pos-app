@@ -25,10 +25,21 @@ import { unitShort } from "@/lib/units"
 import type { Invoice, InvoiceWithLines, InvoiceType, InvoiceStatus } from "@/lib/types"
 import {
   Plus, Printer, Ban, Undo2, Download, FileText, Receipt, TrendingUp, Coins,
+  EyeOff, MessageCircle,
 } from "lucide-react"
 import { describeError } from "@/lib/errors"
 
-type Filter = "all" | InvoiceStatus
+/**
+ * "active" = كل الفواتير ما عدا الملغاة — وصار هو الافتراضي.
+ *
+ * الفاتورة الملغاة كانت تظهر وسط الفواتير العادية بخط مشطوب، فبعد
+ * عدة شهور يصير نصف الجدول شطباً ويصعب قراءته. صارت مخفية، ويظهر
+ * تحت الجدول سطر هادئ يقول كم واحدة مخفية مع زر لإظهارها عند الحاجة.
+ *
+ * ⚠️ لم تُحذف أي فاتورة ولم يتغيّر أي رقم — الإخفاء عرضٌ فقط، وكل
+ *    شيء موجود كما هو في قاعدة البيانات وفي السجل والتقارير.
+ */
+type Filter = "active" | "all" | InvoiceStatus
 
 export function InvoiceList({ kind }: { kind: "sale" | "purchase" }) {
   const { currency, company, can } = useSession()
@@ -42,7 +53,7 @@ export function InvoiceList({ kind }: { kind: "sale" | "purchase" }) {
 
   const month = useMemo(() => resolvePreset("this-month", tz), [tz])
   const [range, setRange] = useState(month)
-  const [filter, setFilter] = useState<Filter>("all")
+  const [filter, setFilter] = useState<Filter>("active")
   const [search, setSearch] = useState("")
 
   const [creating, setCreating] = useState(false)
@@ -54,11 +65,21 @@ export function InvoiceList({ kind }: { kind: "sale" | "purchase" }) {
     [range.from, range.to]
   )
 
+  /** عدد الملغاة في هذه الفترة — للسطر الهادئ تحت الجدول */
+  const cancelledCount = useMemo(
+    () =>
+      (invoices.data ?? []).filter(
+        (i) => (i.type === mainType || i.type === returnType) && i.status === "cancelled"
+      ).length,
+    [invoices.data, mainType, returnType]
+  )
+
   const rows = useMemo(() => {
     let list = (invoices.data ?? []).filter(
       (i) => i.type === mainType || i.type === returnType
     )
-    if (filter !== "all") list = list.filter((i) => i.status === filter)
+    if (filter === "active") list = list.filter((i) => i.status !== "cancelled")
+    else if (filter !== "all") list = list.filter((i) => i.status === filter)
     if (search.trim()) {
       const q = search.trim().toLowerCase()
       list = list.filter(
@@ -173,9 +194,9 @@ export function InvoiceList({ kind }: { kind: "sale" | "purchase" }) {
         <div className="px-5 pt-4 pb-3 flex flex-wrap items-center justify-between gap-3">
           <TabBar<Filter>
             tabs={[
-              { id: "all", label: "الكل", count: rows.length },
-              { id: "confirmed", label: "مؤكّدة" },
-              { id: "cancelled", label: "ملغاة" },
+              { id: "active", label: "السارية", count: rows.length },
+              { id: "cancelled", label: "الملغاة", count: cancelledCount },
+              { id: "all", label: "الكل" },
             ]}
             active={filter}
             onChange={setFilter}
@@ -264,6 +285,26 @@ export function InvoiceList({ kind }: { kind: "sale" | "purchase" }) {
             </tbody>
           </DataTable>
         )}
+
+        {/* سطر هادئ: الملغاة موجودة ومحفوظة، لكنها لا تزاحم الجدول */}
+        {filter === "active" && cancelledCount > 0 && (
+          <div className="mx-5 mb-4 mt-1 flex flex-wrap items-center gap-2 rounded-lg
+                          border border-dashed border-border-strong px-3.5 py-2.5
+                          text-xs text-muted-foreground">
+            <EyeOff className="size-3.5 shrink-0" />
+            <span>
+              <span className="num font-medium">{cancelledCount}</span>{" "}
+              {cancelledCount === 1 ? "فاتورة ملغاة مخفية" : "فواتير ملغاة مخفية"} —
+              محفوظة في السجل ولا تدخل في أي مجموع.
+            </span>
+            <button
+              onClick={() => setFilter("cancelled")}
+              className="text-primary font-medium hover:underline"
+            >
+              إظهارها
+            </button>
+          </div>
+        )}
       </SectionCard>
 
       {detailId && (
@@ -281,6 +322,49 @@ export function InvoiceList({ kind }: { kind: "sale" | "purchase" }) {
 }
 
 /* ================================================================ */
+/* إرسال الفاتورة على واتساب — إضافة جديدة                           */
+/* ================================================================ */
+/**
+ * كانت الطباعة هي الطريقة الوحيدة لإعطاء الزبون فاتورته، مع أن
+ * أغلب الزبائن يريدونها على واتساب.
+ *
+ * هذا يفتح واتساب برسالة جاهزة فيها رقم الفاتورة وأصنافها والمجموع.
+ * لا يُرسل شيئاً تلقائياً — تُفتح المحادثة والرسالة مكتوبة، والمستخدم
+ * هو من يضغط "إرسال". وإن كان للزبون رقم هاتف مسجّل تُفتح محادثته
+ * مباشرة، وإلا فيُختار المستلم من واتساب.
+ */
+function sendOnWhatsApp(
+  inv: InvoiceWithLines,
+  currency: string,
+  companyName?: string
+) {
+  const meta = INVOICE_TYPE_META[inv.type]
+  const lines = inv.lines
+    .map((l) => `• ${l.itemName} — ${formatQty(l.quantity)} × ${l.unitPrice.toFixed(2)} = ${l.lineTotal.toFixed(2)}`)
+    .join("\n")
+
+  const parts = [
+    companyName ? `*${companyName}*` : null,
+    `${meta.label} رقم ${inv.invoiceNo}`,
+    `التاريخ: ${formatDate(inv.date)}`,
+    inv.partyName ? `العميل: ${inv.partyName}` : null,
+    "",
+    lines,
+    "",
+    inv.discountAmount > 0 ? `الخصم: ${inv.discountAmount.toFixed(2)}` : null,
+    inv.taxAmount > 0 ? `الضريبة: ${inv.taxAmount.toFixed(2)}` : null,
+    `*الإجمالي: ${inv.total.toFixed(2)} ${currency === "ILS" ? "₪" : currency}*`,
+    inv.paidAmount > 0 && inv.paidAmount < inv.total
+      ? `المدفوع: ${inv.paidAmount.toFixed(2)} — الباقي: ${(inv.total - inv.paidAmount).toFixed(2)}`
+      : null,
+    inv.dueDate ? `تاريخ الاستحقاق: ${formatDate(inv.dueDate)}` : null,
+  ].filter(Boolean)
+
+  const text = encodeURIComponent(parts.join("\n"))
+  window.open(`https://wa.me/?text=${text}`, "_blank", "noopener,noreferrer")
+}
+
+/* ================================================================ */
 /* تفاصيل الفاتورة                                                   */
 /* ================================================================ */
 
@@ -290,7 +374,7 @@ function InvoiceDetail({ invoiceId, onClose, onChanged, onPrint }: {
   onChanged: () => void
   onPrint: () => void
 }) {
-  const { currency, can } = useSession()
+  const { currency, can, company } = useSession()
   const [cancelling, setCancelling] = useState(false)
   const [returning, setReturning] = useState(false)
 
@@ -319,6 +403,12 @@ function InvoiceDetail({ invoiceId, onClose, onChanged, onPrint }: {
             {data?.status === "confirmed" && can("cancelDocument") && (
               <Btn variant="danger" size="sm" icon={Ban} onClick={() => setCancelling(true)}>
                 إلغاء الفاتورة
+              </Btn>
+            )}
+            {data && (
+              <Btn variant="outline" size="sm" icon={MessageCircle}
+                   onClick={() => sendOnWhatsApp(data, currency, company?.name)}>
+                واتساب
               </Btn>
             )}
             <Btn variant="outline" size="sm" icon={Printer} onClick={onPrint}>طباعة</Btn>

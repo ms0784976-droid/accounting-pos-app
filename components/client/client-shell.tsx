@@ -5,7 +5,7 @@
 // ================================================================
 
 import { useState, useEffect, useMemo } from "react"
-import { AnimatePresence, motion } from "framer-motion"
+import dynamic from "next/dynamic"
 import { useAuth } from "@/lib/store"
 import { SessionProvider, useSession, useAsyncData } from "@/lib/session"
 import { fetchLowStockAction } from "@/app/actions/reports"
@@ -13,24 +13,47 @@ import { ToastProvider, Btn, EmptyState } from "./ui"
 
 import { ClientSidebar } from "./client-sidebar"
 import { ClientTopbar } from "./client-topbar"
-import { OverviewTab } from "./overview-tab"
-import { PartiesTab } from "./parties-tab"
-import { SalesTab } from "./sales-tab"
-import { PurchasesTab } from "./purchases-tab"
-import { ExpensesTab } from "./expenses-tab"
-import { CatalogTab } from "./catalog-tab"
-import { InventoryTab } from "./inventory-tab"
-import { AccountingTab } from "./accounting-tab"
-import { VouchersTab, CashAccountsTab } from "./vouchers-tab"
-import { ReportsTab } from "./reports-tab"
-import { SettingsTab } from "./settings-tab"
-import { AccountTab } from "./account-tab"
-import { UsersTab } from "./users-tab"
 
 import { ROLE_TABS } from "@/lib/constants"
 import type { TabId } from "@/lib/constants"
 import type { AuthUser } from "@/lib/types"
 import { ShieldOff, Loader2 } from "lucide-react"
+
+/* ================================================================ */
+/* ⚡ تحميل الشاشات عند الطلب — لا كلها دفعة واحدة                    */
+/* ================================================================ */
+/**
+ * كان هذا الملف يستورد الشاشات الست عشرة استيراداً مباشراً، فكانت
+ * جافاسكربت كلها (~712 كيلوبايت في حزمة واحدة) تنزل قبل ظهور شاشة
+ * الدخول أصلاً — والكاشير الذي يعمل على المبيعات فقط كان يحمّل شاشة
+ * القيود والميزانية والجرد بلا أي سبب.
+ *
+ * dynamic() يجعل كل شاشة حزمة منفصلة تُطلب عند فتحها أول مرة فقط،
+ * وتبقى محمّلة بعدها. أول تحميل صار أخفّ بكثير.
+ *
+ * ssr:false لأنها شاشات عميل بالكامل كما كانت تماماً — لم يتغيّر أي
+ * سلوك، فقط توقيت التحميل.
+ */
+const ScreenLoading = () => (
+  <div className="flex items-center justify-center py-24">
+    <Loader2 className="size-5 animate-spin text-primary" />
+  </div>
+)
+
+const OverviewTab     = dynamic(() => import("./overview-tab").then((m) => m.OverviewTab),        { ssr: false, loading: ScreenLoading })
+const PartiesTab      = dynamic(() => import("./parties-tab").then((m) => m.PartiesTab),          { ssr: false, loading: ScreenLoading })
+const SalesTab        = dynamic(() => import("./sales-tab").then((m) => m.SalesTab),              { ssr: false, loading: ScreenLoading })
+const PurchasesTab    = dynamic(() => import("./purchases-tab").then((m) => m.PurchasesTab),      { ssr: false, loading: ScreenLoading })
+const ExpensesTab     = dynamic(() => import("./expenses-tab").then((m) => m.ExpensesTab),        { ssr: false, loading: ScreenLoading })
+const CatalogTab      = dynamic(() => import("./catalog-tab").then((m) => m.CatalogTab),          { ssr: false, loading: ScreenLoading })
+const InventoryTab    = dynamic(() => import("./inventory-tab").then((m) => m.InventoryTab),      { ssr: false, loading: ScreenLoading })
+const AccountingTab   = dynamic(() => import("./accounting-tab").then((m) => m.AccountingTab),    { ssr: false, loading: ScreenLoading })
+const VouchersTab     = dynamic(() => import("./vouchers-tab").then((m) => m.VouchersTab),        { ssr: false, loading: ScreenLoading })
+const CashAccountsTab = dynamic(() => import("./vouchers-tab").then((m) => m.CashAccountsTab),    { ssr: false, loading: ScreenLoading })
+const ReportsTab      = dynamic(() => import("./reports-tab").then((m) => m.ReportsTab),          { ssr: false, loading: ScreenLoading })
+const SettingsTab     = dynamic(() => import("./settings-tab").then((m) => m.SettingsTab),        { ssr: false, loading: ScreenLoading })
+const AccountTab      = dynamic(() => import("./account-tab").then((m) => m.AccountTab),          { ssr: false, loading: ScreenLoading })
+const UsersTab        = dynamic(() => import("./users-tab").then((m) => m.UsersTab),              { ssr: false, loading: ScreenLoading })
 
 /* ================================================================ */
 
@@ -61,6 +84,12 @@ function Workspace({ user, onLogout }: { user: AuthUser; onLogout: () => void })
   )
   const [tab, setTab] = useState<TabId>(firstTab)
 
+  /* 📱 حالة القائمة الجانبية:
+     collapsed  = مطويّة إلى أيقونات على الكمبيوتر (كما كانت)
+     mobileOpen = مفتوحة كطبقة فوق المحتوى على الهاتف */
+  const [collapsed, setCollapsed] = useState(false)
+  const [mobileOpen, setMobileOpen] = useState(false)
+
   // حارس إضافي: لو غُيّر الدور أثناء الجلسة، نعيده لتبويب مسموح
   useEffect(() => {
     if (!canSee(tab)) setTab(firstTab)
@@ -79,24 +108,32 @@ function Workspace({ user, onLogout }: { user: AuthUser; onLogout: () => void })
         active={tab}
         onNavigate={setTab}
         badges={{ inventory: low.data?.length ?? 0 }}
+        collapsed={collapsed}
+        onToggleCollapsed={() => setCollapsed((c) => !c)}
+        mobileOpen={mobileOpen}
+        onCloseMobile={() => setMobileOpen(false)}
       />
 
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <ClientTopbar active={tab} onLogout={onLogout} onNavigate={setTab} />
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        <ClientTopbar
+          active={tab}
+          onLogout={onLogout}
+          onNavigate={setTab}
+          onOpenMenu={() => setMobileOpen(true)}
+        />
 
         <main className="flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-[1400px] p-5 lg:p-6">
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={tab}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.16 }}
-              >
-                <TabContent tab={tab} onNavigate={setTab} />
-              </motion.div>
-            </AnimatePresence>
+          {/* حشوة أصغر على الهاتف — كل بكسل يفرق على شاشة 360 */}
+          <div className="mx-auto max-w-[1400px] p-3 sm:p-5 lg:p-6">
+            {/*
+              ⚡ كانت هذه الحركة البسيطة (تلاشٍ 0.16 ثانية) تستدعي
+              مكتبة framer-motion كاملة — أكثر من 100 كيلوبايت تنزل
+              مع كل زيارة من أجل تأثير واحد. استبدلناها بأنيميشن CSS
+              موجود أصلاً في globals.css. نفس الشكل تماماً، بلا مكتبة.
+            */}
+            <div key={tab} className="animate-rise">
+              <TabContent tab={tab} onNavigate={setTab} />
+            </div>
           </div>
         </main>
       </div>
